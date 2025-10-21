@@ -1,0 +1,22 @@
+//| mill-version: 1.0.6
+
+import mill.*, scalalib.*
+
+object forja extends ScalaModule:
+  def scalaVersion = "3.7.3"
+  override def mvnDeps = Seq(
+    mvn"com.lihaoyi::sourcecode:0.4.4",
+    mvn"org.typelevel::cats-core:2.13.0",
+  )
+  def scalacOptions = Seq(
+    "-Werror",
+    "-Wunused:strict-no-implicit-warn",
+    "-Yexplicit-nulls",
+    "-deprecation",
+    "-feature",
+    "-experimental",
+    "-source:future",
+    "-Xcheck-macros",
+    //"-language:experimental.modularity",
+  )
+end forja
