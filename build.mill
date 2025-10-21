@@ -1,8 +1,14 @@
 //| mill-version: 1.0.6
+//| mill-jvm-version: temurin:24
+//| mill-jvm-opts: ["--enable-native-access=ALL-UNNAMED"]
+//| mvnDeps:
+//| - com.goyeau::mill-scalafix::0.6.0
+package build
 
+import com.goyeau.mill.scalafix.ScalafixModule
 import mill.*, scalalib.*
 
-object forja extends ScalaModule:
+object forja extends ScalaModule, ScalafixModule:
   def scalaVersion = "3.7.3"
   override def mvnDeps = Seq(
     mvn"com.lihaoyi::sourcecode:0.4.4",
@@ -17,6 +23,6 @@ object forja extends ScalaModule:
     "-experimental",
     "-source:future",
     "-Xcheck-macros",
-    //"-language:experimental.modularity",
+    // "-language:experimental.modularity",
   )
 end forja

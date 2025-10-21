@@ -1,12 +1,18 @@
 package forja
 
-import scala.quoted.Quotes
-import scala.quoted.Expr
 import scala.collection.concurrent
+import scala.util.NotGiven
 
 final class Token private (val fullName: String):
-  transparent inline def apply(inline args: Node.NodeApplyArg*): Node =
-    ${ Token.applyImpl('this, 'args) }
+  transparent inline def apply(inline args: Node.NodeApplyArg*)(using
+      NotGiven[PatternContext],
+  ): Node =
+    Node.apply(this, args*)
+
+  transparent inline def apply(inline args: Node.PatternApplyArg*)(using
+      inline ctx: PatternContext,
+  ): Pattern[Tuple] =
+    Node.apply(this, args*)
 end Token
 
 object Token:
@@ -15,9 +21,9 @@ object Token:
     byNameStore.getOrElseUpdate(fullName, new Token(fullName))
   end byName
 
-  // def apply()
-
-  def applyImpl(tokenExpr: Expr[Token], args: Expr[Seq[Node.NodeApplyArg]])(using Quotes): Expr[Node] =
-    '{ Node.apply($tokenExpr, $args*) }
-  end applyImpl
+  def apply(shapes: => Wf.Shapes*)(using
+      fullName: sourcecode.FullName,
+  ): Wf.TokenWf =
+    Wf.TokenWf(byName(fullName.value), Wf.ShapeSeq(shapes*))
+  end apply
 end Token

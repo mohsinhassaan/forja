@@ -1,13 +1,18 @@
 package forja.util
 
 import scala.collection.immutable.IndexedSeqOps
-import scala.collection.IterableFactoryDefaults
-import scala.collection.StrictOptimizedSeqFactory
-import scala.collection.mutable
+import scala.collection.{
+  IterableFactoryDefaults,
+  StrictOptimizedSeqFactory,
+  mutable,
+}
 
-final class FastPatchTree[T](left: Vector[T], right: Vector[T]) extends IndexedSeq[T], IndexedSeqOps[T, FastPatchTree, FastPatchTree[T]], IterableFactoryDefaults[T, FastPatchTree]:
+final class FastPatchTree[T](left: Vector[T], right: Vector[T])
+    extends IndexedSeq[T],
+      IndexedSeqOps[T, FastPatchTree, FastPatchTree[T]],
+      IterableFactoryDefaults[T, FastPatchTree]:
   override def iterableFactory = FastPatchTree
-  
+
   def apply(i: Int): T =
     if i < left.length
     then left(i)
@@ -40,7 +45,11 @@ final class FastPatchTree[T](left: Vector[T], right: Vector[T]) extends IndexedS
     )
   end slice
 
-  override def patch[B >: T](from: Int, other: IterableOnce[B], replaced: Int): FastPatchTree[B] =
+  override def patch[B >: T](
+      from: Int,
+      other: IterableOnce[B],
+      replaced: Int,
+  ): FastPatchTree[B] =
     new FastPatchTree(
       left = left
         .take(from)
@@ -66,16 +75,18 @@ final class FastPatchTree[T](left: Vector[T], right: Vector[T]) extends IndexedS
 end FastPatchTree
 
 object FastPatchTree extends StrictOptimizedSeqFactory[FastPatchTree]:
-  def empty[A]: FastPatchTree[A] = new FastPatchTree(left = Vector.empty, right = Vector.empty)
+  def empty[A]: FastPatchTree[A] =
+    new FastPatchTree(left = Vector.empty, right = Vector.empty)
   def from[A](source: IterableOnce[A]): FastPatchTree[A] =
     new FastPatchTree(left = Vector.empty, right = Vector.from(source))
-  def newBuilder[A]: mutable.Builder[A, FastPatchTree[A]] = new mutable.Builder[A, FastPatchTree[A]]:
-    private val vectorBuilder = Vector.newBuilder[A]
-    export vectorBuilder.clear
-    def addOne(elem: A): this.type =
-      vectorBuilder.addOne(elem)
-      this
-    def result(): FastPatchTree[A] =
-      new FastPatchTree(left = Vector.empty, right = vectorBuilder.result())
+  def newBuilder[A]: mutable.Builder[A, FastPatchTree[A]] =
+    new mutable.Builder[A, FastPatchTree[A]]:
+      private val vectorBuilder = Vector.newBuilder[A]
+      export vectorBuilder.clear
+      def addOne(elem: A): this.type =
+        vectorBuilder.addOne(elem)
+        this
+      def result(): FastPatchTree[A] =
+        new FastPatchTree(left = Vector.empty, right = vectorBuilder.result())
   end newBuilder
 end FastPatchTree
