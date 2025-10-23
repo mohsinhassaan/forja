@@ -13,9 +13,16 @@ transparent trait ReflectiveEnumeration[T <: Enumerable: ClassTag]:
     val fields = getClass()
       .getDeclaredFields()
       .view
+      .filter(field => field.getName() != "MODULE$") // skip self ptr
       .filter(field => (field.getModifiers() & Modifier.PUBLIC) != 0)
-      .filter(fld => tClass.isAssignableFrom(fld.getType()))
-      .map(_.get(this).asInstanceOf[T])
+      .filter(field => tClass.isAssignableFrom(field.getType()))
+      .map: field =>
+        field.get(this) match
+          case null =>
+            // If the field is null, try to rustle it into existence via MODULE$ field on its class.
+            field.getType().getField("MODULE$").get(null).asInstanceOf[T]
+          case value =>
+            value.asInstanceOf[T]
     val methods = getClass()
       .getDeclaredMethods()
       .view

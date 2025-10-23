@@ -1,0 +1,14 @@
+package build.langs.calc
+
+import mill.*, scalalib.*
+
+object `package` extends build.ForjaModule:
+  def moduleDeps = Seq(build.forja)
+
+  object test extends ScalaTests:
+    def mvnDeps = Seq(
+      mvn"com.lihaoyi::utest:0.9.1",
+    )
+    def testFramework = "utest.runner.Framework"
+  end test
+end `package`

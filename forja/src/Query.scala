@@ -6,6 +6,7 @@ import cats.{Alternative, Eval, Foldable}
 import forja.util.ReflectiveEnumeration
 
 import scala.collection.mutable
+import scala.quoted.{Expr, Quotes, Varargs}
 import scala.reflect.TypeTest
 
 import Query.*
@@ -54,18 +55,40 @@ object Query:
     end runQueryImpl
   end pure
 
-  final class on[T](patternFn: PatternContext ?=> Pattern[T]) extends Query[T]:
-    val pattern = patternFn(using PatternContext)
-
+  final class on[+T](val pattern: Pattern[T]) extends Query[T]:
     protected def runQueryImpl(node: Node): Eval[Option[T]] =
       pattern.runPattern(node.emptyNodeSpanHere).map(_.map(_._1))
     end runQueryImpl
 
-    final class rewrite(fn: T => Node | Iterable[Node])
-        extends ReflectiveEnumeration.Enumerable:
-      val pattern = on.this.pattern.rewrite(fn)
+    def rewrite[U >: T](fn: U => Node | Iterable[Node]): rewrite[U] =
+      new rewrite(pattern, fn)
     end rewrite
   end on
+
+  object on:
+    transparent inline def apply(
+        inline args: (PatternContext ?=> Any)*,
+    ): on[Any] =
+      ${ applyImpl('args) }
+    end apply
+
+    private def applyImpl(argsExpr: Expr[Seq[PatternContext ?=> Any]])(using
+        Quotes,
+    ): Expr[on[Any]] =
+      argsExpr match
+        case Varargs(argExprs) =>
+          val preprocessedArgs = argExprs.map: argExpr =>
+            Expr.betaReduce('{ $argExpr(using PatternContext) })
+          NodeSpan.applyImpl(Varargs(preprocessedArgs)) match
+            case '{ $pattern: Pattern[t] } =>
+              '{ new on[t]($pattern) }
+    end applyImpl
+  end on
+
+  final class rewrite[T](srcPattern: Pattern[T], fn: T => Node | Iterable[Node])
+      extends ReflectiveEnumeration.Enumerable:
+    val pattern = srcPattern.rewrite(fn)
+  end rewrite
 
   private final class map[T, U](val query: Query[T], fn: T => U)
       extends Query[U]:
@@ -137,10 +160,20 @@ object Query:
           scanPattern(buf, pattern.pattern)
         case pattern: Pattern.tokenExact[?] =>
           Chain.one(Right(buf.ensureBranch.upsert(pattern.token)))
-        case _: (Pattern.tokenAny[?] | Pattern.rep[?] | Pattern.rewrite[?]) =>
+        case _: (Pattern.tokenAny[?] | Pattern.rep[?] | Pattern.rewrite[?] |
+              Pattern.queryPrev[?]) =>
           Chain.one(Left(buf))
         case Pattern.endOfSpan =>
           Chain.one(Right(buf.ensureBranch.upsert(EndOfFieldsMarker)))
+        case _: Pattern.embed[?] =>
+          Chain.one(Left(buf))
+        case pattern: Pattern.EmbedLiteralPattern[?] =>
+          // TODO: add embeds to tree
+          Chain.one(Left(buf))
+        case pattern: Pattern.filter[?] =>
+          scanPattern(buf, pattern.pattern)
+        case pattern: Pattern.captureNode[?] =>
+          scanPattern(buf, pattern.pattern)
     end scanPattern
 
     private def scanQuery[T, Q[_] <: Query[?] | Pattern[?]](
@@ -176,8 +209,6 @@ object Query:
           scanQuery(buf, query.left)
             ++ scanQuery(buf, query.right)
         case Query.currentNode =>
-          Chain.one(Left(buf))
-        case _: Query.rewriteAll =>
           Chain.one(Left(buf))
     end scanQuery
 
@@ -332,63 +363,4 @@ object Query:
     protected def runQueryImpl(node: Node): Eval[Option[Node]] =
       Eval.now(node.parentOption)
   end parent
-
-  final class rewriteAll(rewrites: on[?]#rewrite*) extends Query[Node]:
-    lazy val rewritesAgg =
-      rewrites.view
-        .map(_.pattern)
-        .reduce(_ | _)
-    end rewritesAgg
-
-    protected def runQueryImpl(node: Node): Eval[Option[Node]] =
-      def impl(
-          nodeSpan: NodeSpan,
-          madeChangesThisIteration: Boolean,
-      ): Eval[NodeSpan] =
-        Eval
-          .defer(rewritesAgg.runPattern(nodeSpan))
-          .flatMap:
-            case None =>
-              assert(nodeSpan.isEmpty)
-              def firstChild = nodeSpan
-                .expandRightOption(1)
-                .map(_.head.children.asEmptyNodeSpan)
-              end firstChild
-
-              def firstAvailableParentsSiblingOrRoot(
-                  nodeSpan: NodeSpan,
-              ): NodeSpan =
-                nodeSpan.parentOption match
-                  case None         => nodeSpan
-                  case Some(parent) =>
-                    parent.rightSiblingOption match
-                      case None =>
-                        firstAvailableParentsSiblingOrRoot(
-                          parent.emptyNodeSpanHere,
-                        )
-                      case Some(sibling) => sibling.emptyNodeSpanHere
-              end firstAvailableParentsSiblingOrRoot
-
-              val nextSpan = firstChild.getOrElse(
-                firstAvailableParentsSiblingOrRoot(nodeSpan),
-              )
-              if nextSpan.parentOption.isEmpty
-              then
-                if madeChangesThisIteration
-                then impl(nextSpan, madeChangesThisIteration = false)
-                else Eval.now(nextSpan)
-              else impl(nextSpan, madeChangesThisIteration)
-            case Some(((), nodeSpan)) =>
-              impl(nodeSpan.take(0), madeChangesThisIteration = true)
-      end impl
-
-      impl(node.asOrphan.emptyNodeSpanHere, madeChangesThisIteration = false)
-        .map: nodeSpan =>
-          val replacementNode =
-            nodeSpan.headOption
-              .getOrElse(nodeSpan.expandRightOption(1).get.head)
-          // Put our parents back
-          Some(node.replaceThis(replacementNode))
-    end runQueryImpl
-  end rewriteAll
 end Query

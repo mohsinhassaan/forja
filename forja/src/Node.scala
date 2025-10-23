@@ -7,11 +7,11 @@ import scala.collection.concurrent
 import scala.compiletime.asMatchable
 import scala.language.experimental.into
 import scala.quoted.{Expr, Quotes, Type, Varargs, quotes}
-import scala.util.NotGiven
+import scala.reflect.TypeTest
 
 import Node.*
 
-final class Node @publicInBinary private (
+final class Node @publicInBinary private[forja] (
     private val impl: Node.NodeImpl,
     private val nodeParentInfo: NodeParentInfo,
 ):
@@ -141,6 +141,10 @@ final class Node @publicInBinary private (
       SingletonNodeSpan(this, false)
   end emptyNodeSpanHere
 
+  def query[T](query: Query[T]): Option[T] =
+    query.runQuery(this).value
+  end query
+
   override def equals(that: Any): Boolean =
     that.asMatchable match
       case that: Node => this.impl == that.impl
@@ -151,15 +155,23 @@ final class Node @publicInBinary private (
     this.impl.hashCode()
   end hashCode
 
-  def query[T](query: Query[T]): Option[T] =
-    query.runQuery(this).value
-  end query
+  override def toString(): String =
+    impl match
+      case NodeImpl.TokenNode(token, _, _) =>
+        s"$token(${(this.children.view.map(_.toString()) ++ this.attrs.view.map(
+            (k, v) => s"$k -> $v",
+          )).mkString(", ")})"
+      case NodeImpl.EmbedNode(value) =>
+        value.toString()
+      case NodeImpl.ErrorNode(msg, nodes*) =>
+        s"#error(\"$msg\", ${nodes.mkString(", ")})"
+  end toString
 end Node
 
 export Node.NodeSpan
 
 object Node:
-  def embed[T](value: T)(using embed: Embed[T]): Node =
+  def embed[T <: Matchable](value: T)(using embed: Embed[T]): Node =
     Embed.embedByClass.putIfAbsent(value.getClass(), embed)
     new Node(
       impl = NodeImpl.EmbedNode(value),
@@ -176,76 +188,104 @@ object Node:
 
   type NodeApplyArg = Node | (Token, Node)
 
-  transparent inline def apply(inline token: Token, inline args: NodeApplyArg*)(
-      using NotGiven[PatternContext],
-  ): Node =
-    ${ applyImplNode('token, 'args) }
+  type PatternApplyArg[T] = Pattern[T] | Pattern.Include[T] |
+    (Token, Pattern[T] | Pattern.Include[T])
+
+  transparent inline def apply(inline args: Any*): Node | Pattern[Any] =
+    ${ applyImpl('args) }
   end apply
 
-  private def applyImplNode(
-      tokenExpr: Expr[Token],
-      argsExpr: Expr[Seq[NodeApplyArg]],
-  )(using Quotes): Expr[Node] =
-    argsExpr match
-      case Varargs(argExprs) =>
-        val children = Seq.newBuilder[Expr[NodeImpl]]
-        val attrs = Seq.newBuilder[Expr[(Token, NodeImpl)]]
-        argExprs.foreach:
-          case '{ $expr: Node } =>
-            children += '{ $expr.impl }
-          case '{ $expr: (Token, Node) } =>
-            attrs += '{
-              val pair = $expr
-              (pair._1, pair._2.impl)
+  private[forja] def applyImpl(argsExpr: Expr[Seq[Any]])(using
+      Quotes,
+  ): Expr[Node | Pattern[Any]] =
+    import quotes.reflect.*
+    Expr.summon[PatternContext] match
+      case Some(_) =>
+        argsExpr match
+          case Varargs(Seq('{ $token: Token }, args*)) =>
+            NodeSpan.applyImpl(Varargs(args)) match
+              case '{ $pattern: Pattern[t] } =>
+                '{ Pattern.tokenExact[t]($token, $pattern) }
+          case Varargs(args) =>
+            NodeSpan.applyImpl(Varargs(args)) match
+              case '{ $pattern: Pattern[t] } =>
+                '{ Pattern.tokenAny[t]($pattern) }
+      case None =>
+        argsExpr match
+          case Varargs(argExprs) =>
+            val tokenExpr = argExprs.head match
+              case '{ $expr: Token } => expr
+              case '{ $expr: t }     =>
+                report.errorAndAbort(
+                  s"${Type.show[t]} should match ${Type.show[Token]}",
+                  expr,
+                )
+            end tokenExpr
+
+            val children = Seq.newBuilder[Expr[NodeImpl]]
+            val attrs = Seq.newBuilder[Expr[(Token, NodeImpl)]]
+            argExprs.tail.foreach:
+              case '{ $expr: Node } =>
+                children += '{ $expr.impl }
+              case '{ $expr: (Token, Node) } =>
+                attrs += '{
+                  val pair = $expr
+                  (pair._1, pair._2.impl)
+                }
+              case '{ $expr: t & Matchable } =>
+                Expr.summon[Node.Embed[t & Matchable]] match
+                  case None =>
+                    report.errorAndAbort(
+                      s"${Type.show[t]} should match ${Type.show[Node.NodeApplyArg]} or derive ${Type.show[Node.Embed[t]]}",
+                      expr,
+                    )
+                  case Some(embed) =>
+                    children += '{
+                      Node.embed[t & Matchable]($expr)(using $embed).impl
+                    }
+
+            '{
+              new Node(
+                impl = NodeImpl.TokenNode(
+                  token = $tokenExpr,
+                  children = FastPatchTree(${ Varargs(children.result()) }*),
+                  attrs = Map(${ Varargs(attrs.result()) }*),
+                ),
+                nodeParentInfo = NodeParentInfo.Orphan,
+              )
             }
+  end applyImpl
 
-        '{
-          new Node(
-            impl = NodeImpl.TokenNode(
-              token = $tokenExpr,
-              children = FastPatchTree(${ Varargs(children.result()) }*),
-              attrs = Map(${ Varargs(attrs.result()) }*),
-            ),
-            nodeParentInfo = NodeParentInfo.Orphan,
-          )
-        }
-  end applyImplNode
-
-  type PatternApplyArg = Pattern[?] | Pattern.Include[?] |
-    (Token, Pattern[?] | Pattern.Include[?])
-
-  transparent inline def apply(
-      inline token: Token,
-      inline args: PatternApplyArg*,
-  )(using inline ctx: PatternContext): Pattern[Tuple] =
-    Pattern.tokenExact(token, NodeSpan(args*))
-  end apply
-
-  transparent inline def apply(inline args: PatternApplyArg*)(using
-      inline ctx: PatternContext,
-  ): Pattern[Tuple] =
-    Pattern.tokenAny(NodeSpan(args*))
-  end apply
-
-  trait Embed[T]:
-    def extractOption(value: Any): Option[T]
+  trait Embed[+T]:
+    def extractOption(value: Matchable): Option[T]
   end Embed
 
   object Embed:
     private[Node] val embedByClass = concurrent.TrieMap[Class[?], Embed[?]]()
+
+    type Primitive =
+      Boolean | Byte | Int | Long | Float | Double | Char
+
+    given embedPrimitive: [T <: Primitive] => TypeTest[Any, T] => Embed[T]:
+      def extractOption(value: Matchable): Option[T] =
+        value match
+          case value: T => Some(value)
+          case _        => None
+      end extractOption
+    end embedPrimitive
   end Embed
 
   sealed trait Attrs extends Map[Token, Node]:
 
   end Attrs
 
-  private enum NodeParentInfo:
+  private[forja] enum NodeParentInfo:
     case IndexParent(parent: Node, index: Int)
     case AttrParent(parent: Node, attr: Token)
     case Orphan
   end NodeParentInfo
 
-  private enum NodeImpl:
+  private[forja] enum NodeImpl:
     this match
       case _: (TokenNode | ErrorNode) =>
       // nothing to do here
@@ -260,7 +300,7 @@ object Node:
         children: FastPatchTree[NodeImpl],
         attrs: Map[Token, NodeImpl],
     )
-    case EmbedNode(value: Any)
+    case EmbedNode(value: Matchable)
     case ErrorNode(msg: String, nodes: Node*)
 
     val containsError: Boolean =
@@ -331,32 +371,52 @@ object Node:
   end NodeSpan
 
   object NodeSpan:
-    transparent inline def apply(inline args: PatternApplyArg*)(using
+    transparent inline def apply(inline args: Any*)(using
         PatternContext,
-    ): Pattern[Tuple] =
-      ${ applyImplPattern('args) }
+    ): Pattern[Any] =
+      ${ applyImpl('args) }
     end apply
 
-    private def applyImplPattern(argsExpr: Expr[Seq[PatternApplyArg]])(using
+    private[forja] def applyImpl(argsExpr: Expr[Seq[Any]])(using
         Quotes,
-    ): Expr[Pattern[Tuple]] =
+    ): Expr[Pattern[Any]] =
       import quotes.reflect.*
       argsExpr match
         case Varargs(argExprs) =>
-          // make a pattern
-          val includes = argExprs.collect:
+          val checkedArgs = argExprs.map:
+            case '{ $arg: PatternApplyArg[t] } => arg
+            case '{ $arg: t }                  =>
+              Expr.summon[Node.Embed[t]] match
+                case None =>
+                  report.errorAndAbort(
+                    s"${Type.show[t]} should match ${Type.show[PatternApplyArg[Any]]} or derive ${Type.show[Node.Embed[t]]}",
+                    arg,
+                  )
+                case Some(embed) =>
+                  '{ new Pattern.EmbedLiteralPattern[t]($arg)(using $embed) }
+          end checkedArgs
+          val includes = checkedArgs.collect:
             case '{ $_ : Pattern.Include[t] }          => '{ ??? : t }
             case '{ $_ : (Token, Pattern.Include[t]) } => '{ ??? : t }
           end includes
 
           Expr.ofTupleFromSeq(includes) match
+            case '{ $_ : EmptyTuple } =>
+              '{ Pattern.Tupled(${ Varargs(checkedArgs) }*).map(_ => ()) }
+            case '{ $_ : Tuple1[t] } =>
+              '{
+                Pattern
+                  .Tupled(${ Varargs(checkedArgs) }*)
+                  .asInstanceOf[Pattern[Tuple1[t]]]
+                  .map(_._1)
+              }
             case '{ $_ : includesTuple } =>
               '{
                 Pattern
-                  .Tupled($argsExpr*)
+                  .Tupled(${ Varargs(checkedArgs) }*)
                   .asInstanceOf[Pattern[Tuple & includesTuple]]
               }
-    end applyImplPattern
+    end applyImpl
   end NodeSpan
 
   private final class SingletonNodeSpan(node: Node, includesMe: Boolean)

@@ -8,12 +8,8 @@ package build
 import com.goyeau.mill.scalafix.ScalafixModule
 import mill.*, scalalib.*
 
-object forja extends ScalaModule, ScalafixModule:
+trait ForjaModule extends ScalaModule, ScalafixModule:
   def scalaVersion = "3.7.3"
-  override def mvnDeps = Seq(
-    mvn"com.lihaoyi::sourcecode:0.4.4",
-    mvn"org.typelevel::cats-core:2.13.0",
-  )
   def scalacOptions = Seq(
     "-Werror",
     "-Wunused:strict-no-implicit-warn",
@@ -24,5 +20,13 @@ object forja extends ScalaModule, ScalafixModule:
     "-source:future",
     "-Xcheck-macros",
     // "-language:experimental.modularity",
+  )
+end ForjaModule
+
+object forja extends ForjaModule:
+  override def mvnDeps = Seq(
+    mvn"com.lihaoyi::sourcecode:0.4.4",
+    mvn"com.lihaoyi::os-lib:0.11.5",
+    mvn"org.typelevel::cats-core:2.13.0",
   )
 end forja

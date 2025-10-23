@@ -1,18 +1,15 @@
 package forja
 
+import scala.annotation.publicInBinary
 import scala.collection.concurrent
-import scala.util.NotGiven
+import scala.quoted.{Expr, Quotes, Varargs}
 
 final class Token private (val fullName: String):
-  transparent inline def apply(inline args: Node.NodeApplyArg*)(using
-      NotGiven[PatternContext],
-  ): Node =
-    Node.apply(this, args*)
+  transparent inline def apply(inline args: Any*): Node | Pattern[Any] =
+    ${ Token.tokenApplyImpl('this, 'args) }
+  end apply
 
-  transparent inline def apply(inline args: Node.PatternApplyArg*)(using
-      inline ctx: PatternContext,
-  ): Pattern[Tuple] =
-    Node.apply(this, args*)
+  override def toString(): String = fullName
 end Token
 
 object Token:
@@ -26,4 +23,14 @@ object Token:
   ): Wf.TokenWf =
     Wf.TokenWf(byName(fullName.value), Wf.ShapeSeq(shapes*))
   end apply
+
+  @publicInBinary
+  private[forja] def tokenApplyImpl(
+      tokenExpr: Expr[Token],
+      argsExpr: Expr[Seq[Any]],
+  )(using Quotes): Expr[Node | Pattern[Any]] =
+    argsExpr match
+      case Varargs(argExprs) =>
+        Node.applyImpl(Varargs(tokenExpr +: argExprs))
+  end tokenApplyImpl
 end Token

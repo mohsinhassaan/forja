@@ -8,21 +8,35 @@ end Wf
 
 object Wf:
   sealed trait Shape:
-    def |(other: TokenWf): Shape
+    def |(other: TokenWf | EmbedWf): Shape
   end Shape
 
+  final class EmbedWf private[forja] (val embed: Node.Embed[?]) extends Shape:
+    def |(other: TokenWf | EmbedWf): Shape =
+      Choice(this, other)
+    end |
+  end EmbedWf
+
   final class TokenWf private[forja] (val token: Token, shapeSeq: => ShapeSeq)
-      extends Shape,
-        Pass:
-    def |(other: TokenWf): Shape = Choice(this, other)
+      extends Shape:
+    def |(other: TokenWf | EmbedWf): Shape = Choice(this, other)
+
+    export token.apply
+
+    def replace(shapes: => Shapes*): TokenWf =
+      new TokenWf(token, ShapeSeq(shapes*))
+    end replace
 
     private lazy val stableShapeSeq = shapeSeq
 
-    protected def applyImpl(root: Node): Node = ???
+    object validate extends Pass:
+      protected def applyImpl(root: Node): Node =
+        // TODO: validate
+        root
   end TokenWf
 
-  private final class Choice(tokens: TokenWf*) extends Shape:
-    def |(other: TokenWf): Shape = Choice((tokens :+ other)*)
+  private final class Choice(tokens: TokenWf | EmbedWf*) extends Shape:
+    def |(other: TokenWf | EmbedWf): Shape = Choice((tokens :+ other)*)
   end Choice
 
   type Shapes = Shape | (Token, Shape) | RepeatedShapeSeq
@@ -32,10 +46,4 @@ object Wf:
   private[forja] final class RepeatedShapeSeq private[forja] (
       val shapes: Shapes*,
   )
-
-  def rep(shapes: Shapes*): RepeatedShapeSeq =
-    RepeatedShapeSeq(shapes*)
-  end rep
-
-  given Conversion[TokenWf, Token] = _.token
 end Wf

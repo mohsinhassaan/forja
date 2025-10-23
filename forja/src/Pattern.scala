@@ -3,6 +3,8 @@ package forja
 import cats.Eval
 import cats.data.Chain
 
+import scala.annotation.targetName
+
 import Pattern.*
 
 type PatternContext = PatternContext.type
@@ -19,6 +21,16 @@ sealed abstract class Pattern[+T]:
 
   final def unary_+ : Include[T] = Include(pattern)
 
+  @targetName("captureNodeEmpty")
+  final def unary_!(using T <:< Unit): Include[Node] =
+    Include(Pattern.captureNode(pattern).map(_._1))
+
+  @targetName("captureNodeNonEmpty")
+  final def unary_![U >: T <: NonEmptyTuple](using
+      T <:< U,
+  ): Include[Node *: U] =
+    Include(Pattern.captureNode(pattern).map(_ *: _))
+
   final def |[U >: T](other: Pattern[U]) = new alt(pattern, other)
 
   final def map[U](fn: T => U): Pattern[U] = new map(pattern, fn)
@@ -26,14 +38,47 @@ sealed abstract class Pattern[+T]:
   final def rewrite(fn: T => Node | Iterable[Node]): Pattern[Unit] =
     new rewrite(pattern, fn)
 
+  final def filter(pred: T => Boolean): Pattern[T] = new filter(pattern, pred)
+
   def runPattern(nodeSpan: NodeSpan): Eval[Option[(T, Node.NodeSpan)]]
 end Pattern
 
 object Pattern:
   final class Include[+T](val pattern: Pattern[T])
 
-  private[forja] final class Tupled[Tuple](val elems: Node.PatternApplyArg*)
-      extends Pattern[Tuple]:
+  private[forja] final class filter[T](
+      val pattern: Pattern[T],
+      pred: T => Boolean,
+  ) extends Pattern[T]:
+    def runPattern(nodeSpan: NodeSpan): Eval[Option[(T, NodeSpan)]] =
+      Eval
+        .defer(pattern.runPattern(nodeSpan))
+        .map:
+          case None                    => None
+          case some @ Some((value, _)) =>
+            if pred(value)
+            then some
+            else None
+    end runPattern
+  end filter
+
+  private[forja] final class captureNode[T](val pattern: Pattern[T])
+      extends Pattern[(Node, T)]:
+    def runPattern(nodeSpan: NodeSpan): Eval[Option[((Node, T), NodeSpan)]] =
+      nodeSpan.expandRightOption(1).map(_.last) match
+        case None       => Eval.now(None)
+        case Some(node) =>
+          Eval
+            .defer(pattern.runPattern(nodeSpan))
+            .map:
+              case None                    => None
+              case Some((value, nodeSpan)) => Some(((node, value), nodeSpan))
+    end runPattern
+  end captureNode
+
+  private[forja] final class Tupled[Tuple](
+      val elems: Node.PatternApplyArg[Any]*,
+  ) extends Pattern[Tuple]:
     def runPattern(nodeSpan: NodeSpan): Eval[Option[(Tuple, NodeSpan)]] =
       def impl(
           i: Int,
@@ -172,7 +217,8 @@ object Pattern:
     end runPattern
   end rewrite
 
-  final class rep[T](val elem: Pattern[T]) extends Pattern[List[T]]:
+  private[forja] final class rep[T](val elem: Pattern[T])
+      extends Pattern[List[T]]:
     def runPattern(nodeSpan: NodeSpan): Eval[Option[(List[T], NodeSpan)]] =
       def impl(
           nodeSpan: NodeSpan,
@@ -190,9 +236,32 @@ object Pattern:
     end runPattern
   end rep
 
-  def rep1[T](elem: Pattern[T])(using PatternContext): Pattern[List[T]] =
-    NodeSpan(+elem, +rep(elem)).map(_ :: _)
-  end rep1
+  private[forja] final class embed[T: Node.Embed] extends Pattern[T]:
+    def runPattern(nodeSpan: NodeSpan): Eval[Option[(T, NodeSpan)]] =
+      nodeSpan.expandRightOption(1) match
+        case None           => Eval.now(None)
+        case Some(nodeSpan) =>
+          Eval.now(nodeSpan.last.valueOption.map((_, nodeSpan)))
+    end runPattern
+  end embed
 
-  // TODO: attr pattern
+  private[forja] final class EmbedLiteralPattern[T: Node.Embed](value: T)
+      extends Pattern[T]:
+    def runPattern(nodeSpan: NodeSpan): Eval[Option[(T, NodeSpan)]] =
+      ???
+    end runPattern
+  end EmbedLiteralPattern
+
+  final class queryPrev[T](query: Query[T]) extends Pattern[T]:
+    def runPattern(nodeSpan: NodeSpan): Eval[Option[(T, NodeSpan)]] =
+      nodeSpan.lastOption match
+        case None       => Eval.now(None)
+        case Some(node) =>
+          query
+            .runQuery(node)
+            .map:
+              case None        => None
+              case Some(value) => Some((value, nodeSpan))
+    end runPattern
+  end queryPrev
 end Pattern

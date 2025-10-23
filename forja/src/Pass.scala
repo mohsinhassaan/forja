@@ -17,7 +17,7 @@ trait Pass extends ReflectiveEnumeration.Enumerable:
 end Pass
 
 object Pass:
-  trait RewritePass extends Pass, ReflectiveEnumeration[Query.on[?]#rewrite]:
+  trait RewritePass extends Pass, ReflectiveEnumeration[Query.rewrite[?]]:
     private lazy val rewritesAgg =
       values.view
         .map(_.pattern)
