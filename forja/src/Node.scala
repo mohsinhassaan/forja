@@ -3,7 +3,7 @@ package forja
 import forja.util.{FastPatchTree, MonomorphicIndexedSeq}
 
 import scala.annotation.publicInBinary
-import scala.collection.concurrent
+import scala.collection.{concurrent, mutable}
 import scala.compiletime.asMatchable
 import scala.language.experimental.into
 import scala.quoted.{Expr, Quotes, Type, Varargs, quotes}
@@ -162,7 +162,8 @@ final class Node @publicInBinary private[forja] (
             (k, v) => s"$k -> $v",
           )).mkString(", ")})"
       case NodeImpl.EmbedNode(value) =>
-        value.toString()
+        val embed = Node.Embed.embedByValue(value)
+        s"${value.getClass().getName()}($value)"
       case NodeImpl.ErrorNode(msg, nodes*) =>
         s"#error(\"$msg\", ${nodes.mkString(", ")})"
   end toString
@@ -256,12 +257,16 @@ object Node:
             }
   end applyImpl
 
-  trait Embed[+T]:
+  trait Embed[T]:
     def extractOption(value: Matchable): Option[T]
+    def prettyString(value: T): String
   end Embed
 
   object Embed:
     private[Node] val embedByClass = concurrent.TrieMap[Class[?], Embed[?]]()
+    private[forja] def embedByValue[T](value: T): Node.Embed[T] =
+      embedByClass(value.getClass()).asInstanceOf[Node.Embed[T]]
+    end embedByValue
 
     type Primitive =
       Boolean | Byte | Int | Long | Float | Double | Char
@@ -272,6 +277,9 @@ object Node:
           case value: T => Some(value)
           case _        => None
       end extractOption
+      def prettyString(value: T): String =
+        s"${value.getClass()}($value)"
+      end prettyString
     end embedPrimitive
   end Embed
 
@@ -367,54 +375,103 @@ object Node:
     def replaceThis(nodes: Iterable[Node]): NodeSpan
     def expandLeftOption(n: Int): Option[NodeSpan]
     def expandRightOption(n: Int): Option[NodeSpan]
+    def expandRightMax: NodeSpan
     def parentOption: Option[Node]
+    override protected def className: String = "NodeSpan"
   end NodeSpan
 
   object NodeSpan:
-    transparent inline def apply(inline args: Any*)(using
-        PatternContext,
-    ): Pattern[Any] =
+    transparent inline def apply(
+        inline args: Any*,
+    ): Pattern[Any] | Iterable[Node] =
       ${ applyImpl('args) }
     end apply
 
     private[forja] def applyImpl(argsExpr: Expr[Seq[Any]])(using
         Quotes,
-    ): Expr[Pattern[Any]] =
+    ): Expr[Pattern[Any] | Iterable[Node]] =
       import quotes.reflect.*
       argsExpr match
         case Varargs(argExprs) =>
-          val checkedArgs = argExprs.map:
-            case '{ $arg: PatternApplyArg[t] } => arg
-            case '{ $arg: t }                  =>
-              Expr.summon[Node.Embed[t]] match
-                case None =>
-                  report.errorAndAbort(
-                    s"${Type.show[t]} should match ${Type.show[PatternApplyArg[Any]]} or derive ${Type.show[Node.Embed[t]]}",
-                    arg,
-                  )
-                case Some(embed) =>
-                  '{ new Pattern.EmbedLiteralPattern[t]($arg)(using $embed) }
-          end checkedArgs
-          val includes = checkedArgs.collect:
-            case '{ $_ : Pattern.Include[t] }          => '{ ??? : t }
-            case '{ $_ : (Token, Pattern.Include[t]) } => '{ ??? : t }
-          end includes
+          Expr.summon[PatternContext] match
+            case Some(_) =>
+              val checkedArgs = argExprs.map:
+                case '{ $arg: PatternApplyArg[t] } => arg
+                case '{ $arg: t }                  =>
+                  Expr.summon[Node.Embed[t]] match
+                    case None =>
+                      report.errorAndAbort(
+                        s"${Type.show[t]} should match ${Type.show[PatternApplyArg[Any]]} or derive ${Type.show[Node.Embed[t]]}",
+                        arg,
+                      )
+                    case Some(embed) =>
+                      '{
+                        new Pattern.EmbedLiteralPattern[t]($arg)(using $embed)
+                      }
+              end checkedArgs
+              val includes = checkedArgs.collect:
+                case '{ $_ : Pattern.Include[t] }          => '{ ??? : t }
+                case '{ $_ : (Token, Pattern.Include[t]) } => '{ ??? : t }
+              end includes
 
-          Expr.ofTupleFromSeq(includes) match
-            case '{ $_ : EmptyTuple } =>
-              '{ Pattern.Tupled(${ Varargs(checkedArgs) }*).map(_ => ()) }
-            case '{ $_ : Tuple1[t] } =>
+              Expr.ofTupleFromSeq(includes) match
+                case '{ $_ : EmptyTuple } =>
+                  '{ Pattern.Tupled(${ Varargs(checkedArgs) }*).map(_ => ()) }
+                case '{ $_ : Tuple1[t] } =>
+                  '{
+                    Pattern
+                      .Tupled(${ Varargs(checkedArgs) }*)
+                      .asInstanceOf[Pattern[Tuple1[t]]]
+                      .map(_._1)
+                  }
+                case '{ $_ : includesTuple } =>
+                  '{
+                    Pattern
+                      .Tupled(${ Varargs(checkedArgs) }*)
+                      .asInstanceOf[Pattern[Tuple & includesTuple]]
+                  }
+            case None =>
+              def err[T: Type](v: Expr[T])(using Quotes): Nothing =
+                report.errorAndAbort(
+                  s"${Type.show[T]} should match ${Type.show[Node | IterableOnce[Node]]} or derive ${Type.show[Node.Embed[T]]}",
+                  v,
+                )
+              end err
               '{
-                Pattern
-                  .Tupled(${ Varargs(checkedArgs) }*)
-                  .asInstanceOf[Pattern[Tuple1[t]]]
-                  .map(_._1)
-              }
-            case '{ $_ : includesTuple } =>
-              '{
-                Pattern
-                  .Tupled(${ Varargs(checkedArgs) }*)
-                  .asInstanceOf[Pattern[Tuple & includesTuple]]
+                val buf = mutable.ListBuffer[Node]()
+                ${
+                  def impl(exprs: Seq[Expr[Any]])(using
+                      Quotes,
+                  ): Expr[List[Node]] =
+                    exprs match
+                      case Seq() =>
+                        '{ buf.result() }
+                      case Seq(hd, tl*) =>
+                        hd match
+                          case '{ $node: Node } =>
+                            '{
+                              buf += $node
+                              ${ impl(tl) }
+                            }
+                          case '{ $nodes: IterableOnce[Node] } =>
+                            '{
+                              buf ++= $nodes
+                              ${ impl(tl) }
+                            }
+                          case '{ $v: t & Matchable } =>
+                            Expr.summon[Node.Embed[t & Matchable]] match
+                              case Some(emb) =>
+                                '{
+                                  buf += Node.embed($v)(using $emb)
+                                  ${ impl(tl) }
+                                }
+                              case None =>
+                                err(v)
+                          case '{ $v: t } =>
+                            err(v)
+                  end impl
+                  impl(argExprs)
+                }
               }
     end applyImpl
   end NodeSpan
@@ -450,6 +507,12 @@ object Node:
       else None
     end expandRightOption
 
+    def expandRightMax: NodeSpan =
+      if !includesMe
+      then SingletonNodeSpan(node, true)
+      else this
+    end expandRightMax
+
     def replaceThis(nodes: Iterable[Node]): NodeSpan =
       require(includesMe, "tried to rewrite an empty orphaned span")
       require(
@@ -475,7 +538,11 @@ object Node:
 
     protected def sliceImpl(from: Int, until: Int): NodeSpan =
       val slicedIndices = indices.slice(from, until)
-      IndexedParentNodeSpan(parent, slicedIndices.min, slicedIndices.max)
+      IndexedParentNodeSpan(
+        parent,
+        slicedIndices.headOption.getOrElse(0),
+        slicedIndices.size,
+      )
     end sliceImpl
 
     def expandLeftOption(n: Int): Option[NodeSpan] =
@@ -489,6 +556,13 @@ object Node:
       then Some(IndexedParentNodeSpan(parent, start, length + n))
       else None
     end expandRightOption
+
+    def expandRightMax: NodeSpan =
+      val fullView = parent.children.view.drop(start)
+      if fullView.length != length
+      then IndexedParentNodeSpan(parent, start, fullView.length)
+      else this
+    end expandRightMax
 
     def replaceThis(nodes: Iterable[Node]): NodeSpan =
       val token = parent.tokenOption.get

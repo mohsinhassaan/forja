@@ -35,7 +35,9 @@ sealed abstract class Pattern[+T]:
 
   final def map[U](fn: T => U): Pattern[U] = new map(pattern, fn)
 
-  final def rewrite(fn: T => Node | Iterable[Node]): Pattern[Unit] =
+  final def rewrite(
+      fn: T => Node | Iterable[Node] | syntax.skipRewrite.type,
+  ): Pattern[Unit] =
     new rewrite(pattern, fn)
 
   final def filter(pred: T => Boolean): Pattern[T] = new filter(pattern, pred)
@@ -76,7 +78,7 @@ object Pattern:
     end runPattern
   end captureNode
 
-  private[forja] final class Tupled[Tuple](
+  private[forja] final class Tupled(
       val elems: Node.PatternApplyArg[Any]*,
   ) extends Pattern[Tuple]:
     def runPattern(nodeSpan: NodeSpan): Eval[Option[(Tuple, NodeSpan)]] =
@@ -88,7 +90,7 @@ object Pattern:
         if i == elems.length
         then
           Eval.now(
-            Some((Tuple.fromArray(acc.iterator.toArray).asInstanceOf, nodeSpan)),
+            Some((Tuple.fromArray(acc.iterator.toArray), nodeSpan)),
           )
         else
           elems(i) match
@@ -192,6 +194,17 @@ object Pattern:
     end runPattern
   end tokenAny
 
+  private[forja] final class not[T](val pattern: Pattern[T])
+      extends Pattern[Unit]:
+    def runPattern(nodeSpan: NodeSpan): Eval[Option[(Unit, NodeSpan)]] =
+      Eval
+        .defer(pattern.runPattern(nodeSpan))
+        .map:
+          case None    => Some(((), nodeSpan))
+          case Some(_) => None
+    end runPattern
+  end not
+
   private[forja] object endOfSpan extends Pattern[Unit]:
     def runPattern(nodeSpan: NodeSpan): Eval[Option[(Unit, NodeSpan)]] =
       nodeSpan.expandRightOption(1) match
@@ -202,18 +215,23 @@ object Pattern:
 
   private[forja] final class rewrite[T](
       val pattern: Pattern[T],
-      val fn: T => Node | Iterable[Node],
+      val fn: T => Node | Iterable[Node] | syntax.skipRewrite.type,
   ) extends Pattern[Unit]:
     def runPattern(nodeSpan: NodeSpan): Eval[Option[(Unit, NodeSpan)]] =
       Eval
         .defer(pattern.runPattern(nodeSpan))
         .map:
           _.map: (value, nodeSpan) =>
-            fn(value) match
+            val result = fn(value) match
               case node: Node =>
                 ((), nodeSpan.replaceThis(List(node)))
               case nodes: Iterable[Node] =>
                 ((), nodeSpan.replaceThis(nodes))
+              case syntax.skipRewrite =>
+                ((), nodeSpan)
+
+            // println(s"rewrite ${nodeSpan.parentOption}--> ${result._2.parentOption}")
+            result
     end runPattern
   end rewrite
 
@@ -248,7 +266,13 @@ object Pattern:
   private[forja] final class EmbedLiteralPattern[T: Node.Embed](value: T)
       extends Pattern[T]:
     def runPattern(nodeSpan: NodeSpan): Eval[Option[(T, NodeSpan)]] =
-      ???
+      nodeSpan.expandRightOption(1) match
+        case None           => Eval.now(None)
+        case Some(nodeSpan) =>
+          nodeSpan.last.valueOption[T] match
+            case Some(`value`) =>
+              Eval.now(Some((value, nodeSpan)))
+            case None | Some(_) => Eval.now(None)
     end runPattern
   end EmbedLiteralPattern
 

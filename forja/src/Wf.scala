@@ -1,5 +1,7 @@
 package forja
 
+import scala.annotation.publicInBinary
+
 import Wf.*
 
 trait Wf:
@@ -8,18 +10,20 @@ end Wf
 
 object Wf:
   sealed trait Shape:
-    def |(other: TokenWf | EmbedWf): Shape
+    def |(other: TokenWf | EmbedWf[?]): Shape
   end Shape
 
-  final class EmbedWf private[forja] (val embed: Node.Embed[?]) extends Shape:
-    def |(other: TokenWf | EmbedWf): Shape =
+  final class EmbedWf[T <: Matchable] @publicInBinary private[forja] (using
+      val embed: Node.Embed[T],
+  ) extends Shape:
+    def |(other: TokenWf | EmbedWf[?]): Shape =
       Choice(this, other)
     end |
   end EmbedWf
 
   final class TokenWf private[forja] (val token: Token, shapeSeq: => ShapeSeq)
       extends Shape:
-    def |(other: TokenWf | EmbedWf): Shape = Choice(this, other)
+    def |(other: TokenWf | EmbedWf[?]): Shape = Choice(this, other)
 
     export token.apply
 
@@ -35,8 +39,8 @@ object Wf:
         root
   end TokenWf
 
-  private final class Choice(tokens: TokenWf | EmbedWf*) extends Shape:
-    def |(other: TokenWf | EmbedWf): Shape = Choice((tokens :+ other)*)
+  private final class Choice(tokens: TokenWf | EmbedWf[?]*) extends Shape:
+    def |(other: TokenWf | EmbedWf[?]): Shape = Choice((tokens :+ other)*)
   end Choice
 
   type Shapes = Shape | (Token, Shape) | RepeatedShapeSeq

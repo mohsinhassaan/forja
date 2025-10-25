@@ -21,6 +21,7 @@ import java.nio.charset.{Charset, StandardCharsets}
 import forja.util.MonomorphicIndexedSeq
 
 import scala.collection.mutable
+import scala.reflect.TypeTest
 
 final class SourceRange(
     val source: Source,
@@ -231,12 +232,15 @@ object SourceRange:
   def entire(source: Source): SourceRange =
     new SourceRange(source, 0, source.byteBuffer.limit())
 
-  given embed: Node.Embed[SourceRange]:
-    def extractOption(value: Matchable): Option[SourceRange] =
+  given embed: [T <: SourceRange] => (TypeTest[Matchable, T]) => Node.Embed[T]:
+    def extractOption(value: Matchable): Option[T] =
       value match
-        case sourceRange: SourceRange => Some(sourceRange)
-        case _                        => None
+        case sourceRange: T => Some(sourceRange)
+        case _              => None
     end extractOption
+    def prettyString(value: T): String =
+      value.toString()
+    end prettyString
   end embed
 
   extension (ctx: StringContext)

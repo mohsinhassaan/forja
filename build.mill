@@ -21,6 +21,13 @@ trait ForjaModule extends ScalaModule, ScalafixModule:
     "-Xcheck-macros",
     // "-language:experimental.modularity",
   )
+
+  trait ForjaTests extends ScalaTests:
+    def mvnDeps = Seq(
+      mvn"com.lihaoyi::utest:0.9.1",
+    )
+    def testFramework = "utest.runner.Framework"
+  end ForjaTests
 end ForjaModule
 
 object forja extends ForjaModule:
@@ -29,4 +36,5 @@ object forja extends ForjaModule:
     mvn"com.lihaoyi::os-lib:0.11.5",
     mvn"org.typelevel::cats-core:2.13.0",
   )
+  object test extends ForjaTests
 end forja

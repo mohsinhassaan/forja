@@ -60,7 +60,9 @@ object Query:
       pattern.runPattern(node.emptyNodeSpanHere).map(_.map(_._1))
     end runQueryImpl
 
-    def rewrite[U >: T](fn: U => Node | Iterable[Node]): rewrite[U] =
+    def rewrite[U >: T](
+        fn: U => Node | Iterable[Node] | syntax.skipRewrite.type,
+    ): rewrite[U] =
       new rewrite(pattern, fn)
     end rewrite
   end on
@@ -79,14 +81,21 @@ object Query:
         case Varargs(argExprs) =>
           val preprocessedArgs = argExprs.map: argExpr =>
             Expr.betaReduce('{ $argExpr(using PatternContext) })
-          NodeSpan.applyImpl(Varargs(preprocessedArgs)) match
-            case '{ $pattern: Pattern[t] } =>
-              '{ new on[t]($pattern) }
+          '{
+            given PatternContext = PatternContext
+            ${
+              NodeSpan.applyImpl(Varargs(preprocessedArgs)) match
+                case '{ $pattern: Pattern[t] } =>
+                  '{ new on[t]($pattern) }
+            }
+          }
     end applyImpl
   end on
 
-  final class rewrite[T](srcPattern: Pattern[T], fn: T => Node | Iterable[Node])
-      extends ReflectiveEnumeration.Enumerable:
+  final class rewrite[T](
+      srcPattern: Pattern[T],
+      fn: T => Node | Iterable[Node] | syntax.skipRewrite.type,
+  ) extends ReflectiveEnumeration.Enumerable:
     val pattern = srcPattern.rewrite(fn)
   end rewrite
 
@@ -138,7 +147,7 @@ object Query:
         pattern: Pattern[?],
     ): Chain[Either[RecordList[T, Q], RecordList[T, Q]]] =
       pattern match
-        case pattern: Pattern.Tupled[?] =>
+        case pattern: Pattern.Tupled =>
           pattern.elems.foldLeft(
             Chain.one(Right(buf): Either[RecordList[T, Q], RecordList[T, Q]]),
           ): (acc, elem) =>
@@ -174,6 +183,8 @@ object Query:
           scanPattern(buf, pattern.pattern)
         case pattern: Pattern.captureNode[?] =>
           scanPattern(buf, pattern.pattern)
+        case _: Pattern.not[?] =>
+          Chain.one(Right(buf))
     end scanPattern
 
     private def scanQuery[T, Q[_] <: Query[?] | Pattern[?]](
@@ -214,13 +225,19 @@ object Query:
 
     def fromQuery[T](query: Query[T]): FrozenRecordList[T, Query] =
       val acc = new RecordList[T, Query]
-      query.altOptions.iterator.foreach(scanQuery(acc, _))
+      query.altOptions.iterator.foreach: opt =>
+        scanQuery(acc, opt).iterator
+          .map(_.both)
+          .foreach(_ += opt)
       acc.result().map(_.freeze)
     end fromQuery
 
     def fromPattern[T](pattern: Pattern[T]): FrozenRecordList[T, Pattern] =
       val acc = new RecordList[T, Pattern]
-      pattern.altOptions.iterator.foreach(scanPattern(acc, _))
+      pattern.altOptions.iterator.foreach: opt =>
+        scanPattern(acc, opt).iterator
+          .map(_.both)
+          .foreach(_ += opt)
       acc.result().map(_.freeze)
     end fromPattern
 
