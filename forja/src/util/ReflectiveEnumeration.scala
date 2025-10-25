@@ -1,63 +1,69 @@
 package forja.util
 
-import java.lang.reflect.Modifier
-
+import scala.compiletime.deferred
 import scala.jdk.CollectionConverters.*
-import scala.reflect.ClassTag
+import scala.quoted.{Expr, Quotes, Type, Varargs, quotes}
+import scala.reflect.{ClassTag, TypeTest}
 
 import ReflectiveEnumeration.*
 
-transparent trait ReflectiveEnumeration[T <: Enumerable: ClassTag]:
-  lazy val values =
-    val tClass = summon[ClassTag[T]].runtimeClass
-    val fields = getClass()
-      .getDeclaredFields()
-      .view
-      .filter(field => field.getName() != "MODULE$") // skip self ptr
-      .filter(field => (field.getModifiers() & Modifier.PUBLIC) != 0)
-      .filter(field => tClass.isAssignableFrom(field.getType()))
-      .map: field =>
-        field.get(this) match
-          case null =>
-            // If the field is null, try to rustle it into existence via MODULE$ field on its class.
-            field.getType().getField("MODULE$").get(null).asInstanceOf[T]
-          case value =>
-            value.asInstanceOf[T]
-    val methods = getClass()
-      .getDeclaredMethods()
-      .view
-      .filter(method => (method.getModifiers() & Modifier.PUBLIC) != 0)
-      .filter(method => method.getParameterCount() == 0)
-      .filter(method => tClass.isAssignableFrom(method.getReturnType()))
-      .map(_.invoke(this).asInstanceOf[T])
+transparent trait ReflectiveEnumeration:
+  reflectiveEnumeration =>
+  private[ReflectiveEnumeration] given fieldList
+      : FieldList[reflectiveEnumeration.type] = deferred
 
-    (fields ++ methods)
-      .map: obj =>
-        obj.stackEntries.find(entry =>
-          getClass().isAssignableFrom(entry.getDeclaringClass()),
-        ) match
-          case None        => throw RuntimeException("???")
-          case Some(entry) => (entry.getLineNumber(), obj)
-      .toArray
-      .sortInPlaceBy(_._1)
-      .view
-      .map(_._2)
-      .toList
-  end values
+  def valuesByType[T <: Enumerable: ClassTag](using
+      TypeTest[Enumerable, T],
+  ): IArray[T] =
+    fieldList
+      .fieldValues(this)
+      .collect:
+        case value: T => value
+  end valuesByType
 end ReflectiveEnumeration
 
 object ReflectiveEnumeration:
-  trait Enumerable(using line: sourcecode.Line):
-    private[ReflectiveEnumeration] val stackEntries = StackWalker
-      .getInstance(StackWalker.Option.RETAIN_CLASS_REFERENCE)
-      .walk: stream =>
-        stream
-          .filter: rec =>
-            classOf[ReflectiveEnumeration[?]]
-              .isAssignableFrom(rec.getDeclaringClass())
-          .toList()
-          .asScala
-          .toList
-    end stackEntries
-  end Enumerable
+  trait Enumerable
+
+  trait FieldList[R <: ReflectiveEnumeration]:
+    def fieldValues(r: R): IArray[Enumerable]
+  end FieldList
+
+  inline given inferredFieldList: [R <: ReflectiveEnumeration] => FieldList[R] =
+    ${ inferredFieldListImpl[R] }
+
+  private[forja] def inferredFieldListImpl[R <: ReflectiveEnumeration: Type](
+      using Quotes,
+  ): Expr[FieldList[R]] =
+    import quotes.reflect.*
+    '{
+      new FieldList[R]:
+        def fieldValues(r: R): IArray[Enumerable] =
+          ${
+            val tp = TypeRepr.of[R]
+            if !tp.isSingleton
+            then
+              report.errorAndAbort(
+                s"${tp.show} must be a singleton",
+                Symbol.spliceOwner.pos.get,
+              )
+
+            val syms =
+              (tp.typeSymbol.methodMembers ++ tp.typeSymbol.fieldMembers)
+                .filter: m =>
+                  tp.select(m) <:< TypeRepr.of[Enumerable]
+                .filterNot(_.flags.is(Flags.Protected | Flags.Private))
+                .sortBy: m =>
+                  m.pos
+                    .map: pos =>
+                      (pos.sourceFile.name, pos.start, pos.end)
+                    .getOrElse(("", 0, 0))
+
+            val exprs = syms.map: sym =>
+              'r.asTerm.select(sym).asExprOf[Enumerable]
+            '{ IArray(${ Varargs(exprs) }*) }
+          }
+        end fieldValues
+    }
+  end inferredFieldListImpl
 end ReflectiveEnumeration

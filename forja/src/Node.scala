@@ -5,7 +5,6 @@ import forja.util.{FastPatchTree, MonomorphicIndexedSeq}
 import scala.annotation.publicInBinary
 import scala.collection.{concurrent, mutable}
 import scala.compiletime.asMatchable
-import scala.language.experimental.into
 import scala.quoted.{Expr, Quotes, Type, Varargs, quotes}
 import scala.reflect.TypeTest
 
@@ -187,7 +186,7 @@ object Node:
     )
   end error
 
-  type NodeApplyArg = Node | (Token, Node)
+  type NodeApplyArg = Node | (Token, Node) | IterableOnce[Node]
 
   type PatternApplyArg[T] = Pattern[T] | Pattern.Include[T] |
     (Token, Pattern[T] | Pattern.Include[T])
@@ -223,7 +222,8 @@ object Node:
                 )
             end tokenExpr
 
-            val children = Seq.newBuilder[Expr[NodeImpl]]
+            val children =
+              Seq.newBuilder[Expr[NodeImpl | IterableOnce[NodeImpl]]]
             val attrs = Seq.newBuilder[Expr[(Token, NodeImpl)]]
             argExprs.tail.foreach:
               case '{ $expr: Node } =>
@@ -233,6 +233,8 @@ object Node:
                   val pair = $expr
                   (pair._1, pair._2.impl)
                 }
+              case '{ $expr: IterableOnce[Node] } =>
+                children += '{ $expr.iterator.map(_.impl) }
               case '{ $expr: t & Matchable } =>
                 Expr.summon[Node.Embed[t & Matchable]] match
                   case None =>
@@ -244,12 +246,40 @@ object Node:
                     children += '{
                       Node.embed[t & Matchable]($expr)(using $embed).impl
                     }
+            val childrenSeq = children.result()
 
+            val childrenExpr =
+              if childrenSeq.forall(_.isExprOf[NodeImpl])
+              then
+                '{
+                  FastPatchTree(${
+                    Varargs(childrenSeq.map(_.asExprOf[NodeImpl]))
+                  }*)
+                }
+              else
+                '{
+                  val buf = FastPatchTree.newBuilder[NodeImpl]
+                  ${
+                    childrenSeq.foldRight('{ buf.result() }): (expr, acc) =>
+                      expr match
+                        case '{ $expr: NodeImpl } =>
+                          '{
+                            buf += $expr
+                            $acc
+                          }
+                        case '{ $expr: IterableOnce[NodeImpl] } =>
+                          '{
+                            buf ++= $expr
+                            $acc
+                          }
+                  }
+                }
+            end childrenExpr
             '{
               new Node(
                 impl = NodeImpl.TokenNode(
                   token = $tokenExpr,
-                  children = FastPatchTree(${ Varargs(children.result()) }*),
+                  children = $childrenExpr,
                   attrs = Map(${ Varargs(attrs.result()) }*),
                 ),
                 nodeParentInfo = NodeParentInfo.Orphan,

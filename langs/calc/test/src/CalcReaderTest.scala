@@ -54,30 +54,29 @@ class CalcReaderTest extends TestSuite:
         CalcReader.Tokenized.Number(11),
       )
     }
-    // TODO: groups!
-    // test("(2 + 3) * 4") {
-    //   parseString() ==> CalcReader.Tokenized.Root(
-    //     CalcReader.Tokenized.Group(
-    //       CalcReader.Tokenized.Number(2),
-    //       CalcReader.Tokenized.Add(),
-    //       CalcReader.Tokenized.Number(3),
-    //     ),
-    //     CalcReader.Tokenized.Mul(),
-    //     CalcReader.Tokenized.Number(4),
-    //   )
-    // }
-    // test("((2 + 3) * 4)") {
-    //   parseString() ==> CalcReader.Tokenized.Root(
-    //     CalcReader.Tokenized.Group(
-    //       CalcReader.Tokenized.Group(
-    //         CalcReader.Tokenized.Number(2),
-    //         CalcReader.Tokenized.Add(),
-    //         CalcReader.Tokenized.Number(3),
-    //       ),
-    //       CalcReader.Tokenized.Mul(),
-    //       CalcReader.Tokenized.Number(4),
-    //     ),
-    //   )
-    // }
+    test("(2 + 3) * 4") {
+      parseString() ==> CalcReader.Tokenized.Root(
+        CalcReader.Tokenized.Group(
+          CalcReader.Tokenized.Number(2),
+          CalcReader.Tokenized.Add(),
+          CalcReader.Tokenized.Number(3),
+        ),
+        CalcReader.Tokenized.Mul(),
+        CalcReader.Tokenized.Number(4),
+      )
+    }
+    test("((2 + 3) * 4)") {
+      parseString() ==> CalcReader.Tokenized.Root(
+        CalcReader.Tokenized.Group(
+          CalcReader.Tokenized.Group(
+            CalcReader.Tokenized.Number(2),
+            CalcReader.Tokenized.Add(),
+            CalcReader.Tokenized.Number(3),
+          ),
+          CalcReader.Tokenized.Mul(),
+          CalcReader.Tokenized.Number(4),
+        ),
+      )
+    }
   end tests
 end CalcReaderTest

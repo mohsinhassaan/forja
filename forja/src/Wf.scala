@@ -37,6 +37,7 @@ object Wf:
       protected def applyImpl(root: Node): Node =
         // TODO: validate
         root
+    end validate
   end TokenWf
 
   private final class Choice(tokens: TokenWf | EmbedWf[?]*) extends Shape:
@@ -47,7 +48,7 @@ object Wf:
 
   private[forja] final class ShapeSeq(val shapes: Shapes*)
 
-  private[forja] final class RepeatedShapeSeq private[forja] (
+  private[forja] final class RepeatedShapeSeq @publicInBinary private[forja] (
       val shapes: Shapes*,
   )
 end Wf

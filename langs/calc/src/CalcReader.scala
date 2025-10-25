@@ -41,27 +41,31 @@ object CalcReader extends Pass.MultiPass:
       hd
     end skipWhitespace
 
-    // def openGroup = on(
-    //   !Input.ParseHead(),
-    //   lit('('.toByte),
-    //   +embed[SourceRange],
-    // ).rewrite: (hd, rng) =>
-    //   Tokenized.Group(
-    //     hd,
-    //     rng,
-    //   )
-    // end openGroup
+    def openGroup = on(
+      !Input.ParseHead(),
+      lit('('.toByte),
+      +embed[SourceRange],
+    ).rewrite: (hd, rng) =>
+      Tokenized.Group(
+        hd,
+        rng,
+      )
+    end openGroup
 
-    // def closeGroup = on(
-    //   +Tokenized.Group(
-    //     rep(not(Input.ParseHead())),
-    //     !Input.ParseHead(),
-    //     lit(')'.toByte),
-    //     +embed[SourceRange],
-    //   ),
-    // ).rewrite: (hd, rng) =>
-    //   ???
-    // end closeGroup
+    def closeGroup = on(
+      !Tokenized.Group(
+        rep(NodeSpan(not(Input.ParseHead()), Node())),
+        !Input.ParseHead(),
+        lit(')'.toByte),
+        +embed[SourceRange],
+      ),
+    ).rewrite: (g, hd, rng) =>
+      NodeSpan(
+        Tokenized.Group(g.children.view.dropRight(3)),
+        hd,
+        rng,
+      )
+    end closeGroup
 
     def parseToken = on(
       !Input.ParseHead(),

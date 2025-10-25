@@ -17,9 +17,9 @@ trait Pass extends ReflectiveEnumeration.Enumerable:
 end Pass
 
 object Pass:
-  trait RewritePass extends Pass, ReflectiveEnumeration[Query.rewrite[?]]:
-    private lazy val rewritesAgg =
-      values.view
+  trait RewritePass extends Pass, ReflectiveEnumeration:
+    private lazy val rewritesAgg: Pattern[Unit] =
+      valuesByType[Query.rewrite[?]].view
         .map(_.pattern)
         .reduce(_ | _)
     end rewritesAgg
@@ -74,10 +74,11 @@ object Pass:
     end applyImpl
   end RewritePass
 
-  trait MultiPass extends Pass, ReflectiveEnumeration[Pass]:
+  trait MultiPass extends Pass, ReflectiveEnumeration:
+    private lazy val passes = valuesByType[Pass]
     final protected def applyImpl(root: Node): Node =
       var node = root
-      values.foreach: pass =>
+      passes.foreach: pass =>
         if !node.containsError
         then node = pass(node)
       node

@@ -3,7 +3,7 @@ package forja
 import cats.Eval
 import cats.data.Chain
 
-import scala.annotation.targetName
+import scala.compiletime.summonFrom
 
 import Pattern.*
 
@@ -21,15 +21,13 @@ sealed abstract class Pattern[+T]:
 
   final def unary_+ : Include[T] = Include(pattern)
 
-  @targetName("captureNodeEmpty")
-  final def unary_!(using T <:< Unit): Include[Node] =
-    Include(Pattern.captureNode(pattern).map(_._1))
-
-  @targetName("captureNodeNonEmpty")
-  final def unary_![U >: T <: NonEmptyTuple](using
-      T <:< U,
-  ): Include[Node *: U] =
-    Include(Pattern.captureNode(pattern).map(_ *: _))
+  final transparent inline def unary_! : Include[Node | Tuple] =
+    summonFrom:
+      case given (T <:< Unit) =>
+        Include(Pattern.captureNode(pattern).map(_._1))
+      case ev: (T <:< (t & Tuple)) =>
+        Include(Pattern.captureNode(pattern).map(p => p._1 *: ev(p._2)))
+  end unary_!
 
   final def |[U >: T](other: Pattern[U]) = new alt(pattern, other)
 

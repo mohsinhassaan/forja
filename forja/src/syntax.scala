@@ -29,23 +29,23 @@ object syntax:
         ??? // new Wf.EmbedWf[T]
   end embed
 
+  transparent inline def rep[T](
+      elem: Pattern[T] | Wf.Shapes,
+  ): Pattern[List[T]] | Wf.RepeatedShapeSeq =
+    inline elem match
+      case elem: Pattern[T] =>
+        Pattern.rep(elem)
+      case elem: Wf.Shapes =>
+        ??? // new Wf.RepeatedShapeSeq(Seq(elem))
   object nodeSyntax:
 
   end nodeSyntax
 
   object wfSyntax:
     export Wf.TokenWf
-
-    def rep(shapes: Wf.Shapes*): Wf.RepeatedShapeSeq =
-      Wf.RepeatedShapeSeq(shapes*)
-    end rep
   end wfSyntax
 
   object patternSyntax:
-    def rep[T](elem: Pattern[T]): Pattern[List[T]] =
-      Pattern.rep(elem)
-    end rep
-
     def rep1[T](elem: Pattern[T])(using PatternContext): Pattern[List[T]] =
       NodeSpan(+elem, +rep(elem)).map(_ :: _)
     end rep1
