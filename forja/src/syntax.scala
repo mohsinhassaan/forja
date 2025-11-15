@@ -1,7 +1,5 @@
 package forja
 
-import scala.compiletime.summonFrom
-
 object syntax:
   export nodeSyntax.*
   export wfSyntax.*
@@ -10,23 +8,24 @@ object syntax:
 
   object skipRewrite
 
+  def ctx[C <: Context](c: C): c.type = c
+  
+
   transparent inline def lit[T <: Matchable: Node.Embed](
       value: T,
   ): Node | Pattern[T] =
-    summonFrom:
-      case given PatternContext =>
-        new Pattern.EmbedLiteralPattern(value)
-      case _ =>
-        Node.embed(value)
+    Context.dispatch(
+      patFn = new Pattern.EmbedLiteralPattern(value),
+      vFn = Node.embed(value),
+    )
   end lit
 
   transparent inline def embed[T <: Matchable: Node.Embed]
       : Wf.EmbedWf[T] | Pattern[T] =
-    summonFrom:
-      case given PatternContext =>
-        new Pattern.embed[T]
-      case _ =>
-        ??? // new Wf.EmbedWf[T]
+    Context.dispatch(
+      patFn = new Pattern.embed[T],
+      vFn = ???,
+    )
   end embed
 
   transparent inline def rep[T](
@@ -37,6 +36,18 @@ object syntax:
         Pattern.rep(elem)
       case elem: Wf.Shapes =>
         ??? // new Wf.RepeatedShapeSeq(Seq(elem))
+  end rep
+
+  // The glob pattern, match any number of nodes --> NodeSpan
+  // extension? Can put a condition on which nodes matched 
+  // Tricky semantics:
+  // - if there is a pattern after, must expand until pattern does not match
+  // - if no pattern after, match everything
+  // - same with unguarded prefix, but match from RHS of node span (reversed match order!)
+
+  case object `...`
+  type `...` = `...`.type
+  
   object nodeSyntax:
 
   end nodeSyntax
@@ -46,11 +57,11 @@ object syntax:
   end wfSyntax
 
   object patternSyntax:
-    def rep1[T](elem: Pattern[T])(using PatternContext): Pattern[List[T]] =
+    def rep1[T](elem: Pattern[T])(using Context.PatternContext): Pattern[List[T]] =
       NodeSpan(+elem, +rep(elem)).map(_ :: _)
     end rep1
 
-    def not[T](elem: Pattern[T])(using PatternContext): Pattern[Unit] =
+    def not[T](elem: Pattern[T])(using Context.PatternContext): Pattern[Unit] =
       Pattern.not(elem)
     end not
   end patternSyntax

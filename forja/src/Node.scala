@@ -189,7 +189,7 @@ object Node:
   type NodeApplyArg = Node | (Token, Node) | IterableOnce[Node]
 
   type PatternApplyArg[T] = Pattern[T] | Pattern.Include[T] |
-    (Token, Pattern[T] | Pattern.Include[T])
+    syntax.`...` | (Token, Pattern[T] | Pattern.Include[T])
 
   transparent inline def apply(inline args: Any*): Node | Pattern[Any] =
     ${ applyImpl('args) }
@@ -199,8 +199,8 @@ object Node:
       Quotes,
   ): Expr[Node | Pattern[Any]] =
     import quotes.reflect.*
-    Expr.summon[PatternContext] match
-      case Some(_) =>
+    Context.dispatchImpl(
+      patFn = {
         argsExpr match
           case Varargs(Seq('{ $token: Token }, args*)) =>
             NodeSpan.applyImpl(Varargs(args)) match
@@ -210,7 +210,8 @@ object Node:
             NodeSpan.applyImpl(Varargs(args)) match
               case '{ $pattern: Pattern[t] } =>
                 '{ Pattern.tokenAny[t]($pattern) }
-      case None =>
+      },
+      vFn = {
         argsExpr match
           case Varargs(argExprs) =>
             val tokenExpr = argExprs.head match
@@ -285,6 +286,8 @@ object Node:
                 nodeParentInfo = NodeParentInfo.Orphan,
               )
             }
+      },
+    )
   end applyImpl
 
   trait Embed[T]:
@@ -423,8 +426,8 @@ object Node:
       import quotes.reflect.*
       argsExpr match
         case Varargs(argExprs) =>
-          Expr.summon[PatternContext] match
-            case Some(_) =>
+          Context.dispatchImpl(
+            patFn = {
               val checkedArgs = argExprs.map:
                 case '{ $arg: PatternApplyArg[t] } => arg
                 case '{ $arg: t }                  =>
@@ -460,7 +463,8 @@ object Node:
                       .Tupled(${ Varargs(checkedArgs) }*)
                       .asInstanceOf[Pattern[Tuple & includesTuple]]
                   }
-            case None =>
+            },
+            vFn = {
               def err[T: Type](v: Expr[T])(using Quotes): Nothing =
                 report.errorAndAbort(
                   s"${Type.show[T]} should match ${Type.show[Node | IterableOnce[Node]]} or derive ${Type.show[Node.Embed[T]]}",
@@ -503,6 +507,8 @@ object Node:
                   impl(argExprs)
                 }
               }
+            },
+          )
     end applyImpl
   end NodeSpan
 

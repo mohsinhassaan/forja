@@ -57,11 +57,11 @@ object Query:
 
   final class on[+T](val pattern: Pattern[T]) extends Query[T]:
     protected def runQueryImpl(node: Node): Eval[Option[T]] =
-      pattern.runPattern(node.emptyNodeSpanHere).map(_.map(_._1))
+      Eval.now(pattern.runPattern(node.emptyNodeSpanHere, Pattern.MatchDir.Right).map(_._1))
     end runQueryImpl
 
     def rewrite[U >: T](
-        fn: U => Node | Iterable[Node] | syntax.skipRewrite.type,
+        fn: Context.ValueContext ?=> U => Node | Iterable[Node] | syntax.skipRewrite.type,
     ): rewrite[U] =
       new rewrite(pattern, fn)
     end rewrite
@@ -69,20 +69,20 @@ object Query:
 
   object on:
     transparent inline def apply(
-        inline args: (PatternContext ?=> Any)*,
+        inline args: (Context.PatternContext ?=> Any)*,
     ): on[Any] =
       ${ applyImpl('args) }
     end apply
 
-    private def applyImpl(argsExpr: Expr[Seq[PatternContext ?=> Any]])(using
+    private def applyImpl(argsExpr: Expr[Seq[Context.PatternContext ?=> Any]])(using
         Quotes,
     ): Expr[on[Any]] =
       argsExpr match
         case Varargs(argExprs) =>
           val preprocessedArgs = argExprs.map: argExpr =>
-            Expr.betaReduce('{ $argExpr(using PatternContext) })
+            Expr.betaReduce('{ $argExpr(using Context.PatternContext) })
           '{
-            given PatternContext = PatternContext
+            given Context.PatternContext = Context.PatternContext
             ${
               NodeSpan.applyImpl(Varargs(preprocessedArgs)) match
                 case '{ $pattern: Pattern[t] } =>
@@ -94,7 +94,7 @@ object Query:
 
   final class rewrite[T](
       srcPattern: Pattern[T],
-      fn: T => Node | Iterable[Node] | syntax.skipRewrite.type,
+      fn: Context.ValueContext ?=> T => Node | Iterable[Node] | syntax.skipRewrite.type,
   ) extends ReflectiveEnumeration.Enumerable:
     val pattern = srcPattern.rewrite(fn)
   end rewrite
@@ -169,11 +169,8 @@ object Query:
           scanPattern(buf, pattern.pattern)
         case pattern: Pattern.tokenExact[?] =>
           Chain.one(Right(buf.ensureBranch.upsert(pattern.token)))
-        case _: (Pattern.tokenAny[?] | Pattern.rep[?] | Pattern.rewrite[?] |
-              Pattern.queryPrev[?]) =>
+        case _: (Pattern.tokenAny[?] | Pattern.rep[?] | Pattern.rewrite[?]) =>
           Chain.one(Left(buf))
-        case Pattern.endOfSpan =>
-          Chain.one(Right(buf.ensureBranch.upsert(EndOfFieldsMarker)))
         case _: Pattern.embed[?] =>
           Chain.one(Left(buf))
         case pattern: Pattern.EmbedLiteralPattern[?] =>
@@ -185,6 +182,8 @@ object Query:
           scanPattern(buf, pattern.pattern)
         case _: Pattern.not[?] =>
           Chain.one(Right(buf))
+        case pattern: Pattern.here[?] =>
+          scanPattern(buf, pattern).map(_.forceLeft)
     end scanPattern
 
     private def scanQuery[T, Q[_] <: Query[?] | Pattern[?]](

@@ -52,6 +52,11 @@ object CalcReader extends Pass.MultiPass:
       )
     end openGroup
 
+    // TODO:
+    // - use `...` to match the end of the group
+    // - perform an in-place rewrite _inside_ the group to truncate the last 3 elems
+    // - exfiltrate last 3 elems to use in super-pattern
+
     def closeGroup = on(
       !Tokenized.Group(
         rep(NodeSpan(not(Input.ParseHead()), Node())),
