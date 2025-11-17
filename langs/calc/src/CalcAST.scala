@@ -11,7 +11,7 @@ trait CalcAST extends Wf:
       | Mul
       | Div,
   )
-  lazy val Number = Token(embed[Int])
+  lazy val Number = Token(cc.embed[Int])
   lazy val Add = Token(
     Expression,
     Expression,

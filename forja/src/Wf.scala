@@ -5,7 +5,7 @@ import scala.annotation.publicInBinary
 import Wf.*
 
 trait Wf:
-
+  protected given localContext: syntax.WfContext.type = syntax.WfContext
 end Wf
 
 object Wf:

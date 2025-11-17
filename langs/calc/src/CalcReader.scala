@@ -8,7 +8,7 @@ object CalcReader extends Pass.MultiPass:
   trait Input extends Wf:
     lazy val Root = Token(
       ParseHead,
-      embed[SourceRange],
+      cc.embed[SourceRange],
     )
     lazy val ParseHead = Token()
   end Input
@@ -27,24 +27,33 @@ object CalcReader extends Pass.MultiPass:
     private val numberBytes = ('0' to '9').map(_.toByte).toSet
 
     def popByte = on(
-      !Input.ParseHead(),
-      +rep(embed[Byte].filter(numberBytes)),
-      +embed[SourceRange].filter(_.nonEmpty),
-    ).rewrite: (hd, bytes, rng) =>
-      NodeSpan(hd, bytes.map(lit), rng.head, rng.tail)
+      Input.ParseHead(),
+      cc.embed[SourceRange]
+        .filter(_.nonEmpty)
+        .rewrite: rng =>
+          if numberBytes(rng.head)
+          then
+            NodeSpan(
+              rng.head,
+              rng.tail.iterator.takeWhile(numberBytes).map(cc.lit),
+              rng.tail.dropWhile(numberBytes),
+            )
+          else NodeSpan(rng.head, rng.tail),
+    ).rewrite: _ =>
+      unchanged
     end popByte
 
     def skipWhitespace = on(
       !Input.ParseHead(),
-      lit(' '.toByte) | lit('\n'.toByte) | lit('\t'.toByte),
+      cc.lit(' '.toByte, '\n'.toByte, '\t'.toByte),
     ).rewrite: hd =>
-      hd
+      hd._1
     end skipWhitespace
 
     def openGroup = on(
       !Input.ParseHead(),
-      lit('('.toByte),
-      +embed[SourceRange],
+      cc.lit('('.toByte),
+      +cc.embed[SourceRange],
     ).rewrite: (hd, rng) =>
       Tokenized.Group(
         hd,
@@ -52,45 +61,38 @@ object CalcReader extends Pass.MultiPass:
       )
     end openGroup
 
-    // TODO:
-    // - use `...` to match the end of the group
-    // - perform an in-place rewrite _inside_ the group to truncate the last 3 elems
-    // - exfiltrate last 3 elems to use in super-pattern
-
     def closeGroup = on(
       !Tokenized.Group(
-        rep(NodeSpan(not(Input.ParseHead()), Node())),
-        !Input.ParseHead(),
-        lit(')'.toByte),
-        +embed[SourceRange],
+        `...`,
+        +NodeSpan(
+          !Input.ParseHead(),
+          cc.lit(')'.toByte),
+          +cc.embed[SourceRange],
+        ).rewriteMap: p =>
+          (p, NodeSpan()),
       ),
     ).rewrite: (g, hd, rng) =>
-      NodeSpan(
-        Tokenized.Group(g.children.view.dropRight(3)),
-        hd,
-        rng,
-      )
+      NodeSpan(g, hd, rng)
     end closeGroup
 
     def parseToken = on(
       !Input.ParseHead(),
-      +(tokenBytes.map((b, tok) => lit(b).map((_, tok))).reduce(_ | _)),
-    ).rewrite: (hd, p) =>
-      NodeSpan(p._2(), hd)
+      +(tokenBytes.map((b, tok) => cc.lit(b).map((_, tok))).reduce(_ | _)),
+    ).rewrite: (hd, _, tok) =>
+      NodeSpan(tok(), hd)
     end parseToken
 
     def doneReading = on(
       Input.ParseHead(),
-      embed[SourceRange].filter(_.isEmpty),
+      cc.embed[SourceRange].filter(_.isEmpty),
     ).rewrite: _ =>
       NodeSpan()
     end doneReading
 
     def readNumber = on(
       !Input.ParseHead(),
-      +rep1(embed[Byte].filter(numberBytes)),
-      +(embed[Byte].filter(b => !numberBytes(b)).map(Node.embed)
-        | embed[SourceRange].filter(_.isEmpty).map(Node.embed)),
+      +cc.rep1(cc.embed[Byte].filter(numberBytes)),
+      +cc.embed[SourceRange],
     ).rewrite: (hd, bytes, last) =>
       val num: Int = bytes.iterator.map(_.toChar).mkString.toInt
       NodeSpan(Tokenized.Number(num), hd, last)
@@ -107,14 +109,14 @@ object CalcReader extends Pass.MultiPass:
         | Group
     end anyTok
     override lazy val Root = Input.Root.replace(
-      rep(anyTok),
+      cc.rep(anyTok),
     )
     override lazy val Add = CalcAST.Add.replace()
     override lazy val Sub = CalcAST.Sub.replace()
     override lazy val Mul = CalcAST.Mul.replace()
     override lazy val Div = CalcAST.Div.replace()
     lazy val Group = Token(
-      rep(anyTok),
+      cc.rep(anyTok),
     )
   end Tokenized
 

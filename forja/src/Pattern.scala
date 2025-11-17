@@ -3,9 +3,8 @@ package forja
 import cats.data.Chain
 import scala.collection.mutable
 
-import scala.compiletime.summonFrom
-
 import Pattern.*
+import scala.annotation.tailrec
 
 sealed abstract class Pattern[+T]:
   pattern =>
@@ -18,12 +17,8 @@ sealed abstract class Pattern[+T]:
 
   final def unary_+ : Include[T] = Include(pattern)
 
-  final transparent inline def unary_! : Include[Node | Tuple] =
-    summonFrom:
-      case given (T <:< Unit) =>
-        Include(Pattern.captureNode(pattern).map(_._1))
-      case ev: (T <:< (t & Tuple)) =>
-        Include(Pattern.captureNode(pattern).map(p => p._1 *: ev(p._2)))
+  final def unary_! [U >: T <: Tuple](using ev: T <:< U) : Include[Node *: U] =
+    Include(Pattern.captureNode(pattern).map(p => p._1 *: ev(p._2)))
   end unary_!
 
   final def |[U >: T](other: Pattern[U]) = new alt(pattern, other)
@@ -31,30 +26,33 @@ sealed abstract class Pattern[+T]:
   final def map[U](fn: T => U): Pattern[U] = new map(pattern, fn)
 
   final def rewrite(
-      fn: Context.ValueContext ?=> T => Node | Iterable[Node] | syntax.skipRewrite.type,
+      fn: syntax.ValueContext.type ?=> T => Node | Iterable[Node] | syntax.unchanged.type,
   ): Pattern[Unit] =
-    new rewrite(pattern, fn(using Context.ValueContext))
+    rewriteMap: t =>
+      ((), fn(t))
+  end rewrite
+
+  final def rewriteMap[U](fn: syntax.ValueContext.type ?=> T => (U, Node | Iterable[Node] | syntax.unchanged.type)): Pattern[U] =
+    new rewriteMap(pattern, fn(using syntax.ValueContext))
+  end rewriteMap
 
   final def filter(pred: T => Boolean): Pattern[T] = new filter(pattern, pred)
 
   final def here[U](using ev: T <:< Node)(query: Query[U]): Pattern[U] =
     new here(pattern.map(ev), query)
 
-  def runPattern(nodeSpan: NodeSpan, dir: MatchDir): Option[(T, Node.NodeSpan)]
+  def runPattern(nodeSpan: NodeSpan): Option[(T, Node.NodeSpan)]
 end Pattern
 
 object Pattern:
-  enum MatchDir:
-    case Left, Right
-  end MatchDir
   final class Include[+T](val pattern: Pattern[T])
 
   private[forja] final class filter[T](
       val pattern: Pattern[T],
       pred: T => Boolean,
   ) extends Pattern[T]:
-    def runPattern(nodeSpan: NodeSpan, dir: MatchDir): Option[(T, NodeSpan)] =
-      pattern.runPattern(nodeSpan, dir)
+    def runPattern(nodeSpan: NodeSpan): Option[(T, NodeSpan)] =
+      pattern.runPattern(nodeSpan)
         .filter: (value, _) =>
           pred(value)
     end runPattern
@@ -62,237 +60,224 @@ object Pattern:
 
   private[forja] final class captureNode[T](val pattern: Pattern[T])
       extends Pattern[(Node, T)]:
-    def runPattern(nodeSpan: NodeSpan, dir: MatchDir): Option[((Node, T), NodeSpan)] =
-      val nodeOpt = dir match
-        case MatchDir.Right => nodeSpan.expandRightOption(1).map(_.last)
-        case MatchDir.Left => nodeSpan.expandLeftOption(1).map(_.head)
-      nodeOpt match
-        case None       => None
-        case Some(node) =>
-          pattern.runPattern(nodeSpan, dir)
-            .map: (value, nodeSpan) =>
+    def runPattern(nodeSpan: NodeSpan): Option[((Node, T), NodeSpan)] =
+      val nodeIdx = nodeSpan.size
+      pattern.runPattern(nodeSpan)
+        .flatMap: (value, nodeSpan) =>
+          nodeSpan
+            .lift(nodeIdx)
+            .map: node =>
               ((node, value), nodeSpan)
     end runPattern
   end captureNode
 
-  private[forja] final class Tupled(
-      val elems: Node.PatternApplyArg[Any]*,
-  ) extends Pattern[Tuple]:
-    def runPattern(nodeSpan: NodeSpan, dir: MatchDir): Option[(Tuple, NodeSpan)] =
-      ???
-      // def impl(
-      //     i: Int,
-      //     nodeSpan: NodeSpan,
-      //     acc: Chain[Any],
-      // ): Eval[Option[(Tuple, NodeSpan)]] =
-      //   if i == elems.length
-      //   then
-      //     Eval.now(
-      //       Some((Tuple.fromArray(acc.iterator.toArray), nodeSpan)),
-      //     )
-      //   else
-      //     elems(i) match
-      //       case include: Include[?] =>
-      //         Eval
-      //           .defer(include.pattern.runPattern(nodeSpan))
-      //           .flatMap:
-      //             case None                    => Eval.now(None)
-      //             case Some((value, nodeSpan)) =>
-      //               impl(i + 1, nodeSpan, acc :+ value)
-      //       case pattern: Pattern[?] =>
-      //         Eval
-      //           .defer(pattern.runPattern(nodeSpan))
-      //           .flatMap:
-      //             case None                => Eval.now(None)
-      //             case Some((_, nodeSpan)) =>
-      //               impl(i + 1, nodeSpan, acc)
-      //       case (
-      //             token: Token,
-      //             patternOrInclude: (Pattern[?] | Pattern.Include[?]),
-      //           ) =>
-      //         nodeSpan.parentOption match
-      //           case None         => Eval.now(None)
-      //           case Some(parent) =>
-      //             parent.attrs.get(token) match
-      //               case None        => Eval.now(None)
-      //               case Some(child) =>
-      //                 patternOrInclude match
-      //                   case pattern: Pattern[?] =>
-      //                     Eval
-      //                       .defer(pattern.runPattern(child.emptyNodeSpanHere))
-      //                       .flatMap:
-      //                         case None    => Eval.now(None)
-      //                         case Some(_) =>
-      //                           impl(i + 1, nodeSpan, acc)
-      //                   case include: Pattern.Include[?] =>
-      //                     Eval
-      //                       .defer(
-      //                         include.pattern
-      //                           .runPattern(child.emptyNodeSpanHere),
-      //                       )
-      //                       .flatMap:
-      //                         case None             => Eval.now(None)
-      //                         case Some((value, _)) =>
-      //                           impl(i + 1, nodeSpan, acc :+ value)
-      // end impl
-
-      // impl(0, nodeSpan, Chain.empty)
+  private[forja] final class Tupled[Result <: Tuple](
+    tupleArity: Int,
+    isTotal: Boolean,
+    val cases: List[Tupled.Case],
+  ) extends Pattern[Result]:
+    def runPattern(nodeSpan: NodeSpan): Option[(Result, NodeSpan)] =
+      import Tupled.*
+      val resultsArr = Array.ofDim[Any](tupleArity)
+      @tailrec
+      def impl(cases: List[Tupled.Case], resultIdx: Int, nodeSpan: NodeSpan, searchStack: List[(resultIdx: Int, nodeSpan: NodeSpan, cases: List[Tupled.Case])]): Option[(Result, NodeSpan)] =
+        inline def failCase: Option[(Result, NodeSpan)] =
+          searchStack match
+            case Nil =>
+              None
+            case hd :: searchStackTl =>
+              impl(hd.cases, hd.resultIdx, hd.nodeSpan, searchStackTl)
+        end failCase
+        
+        cases match
+          case Nil =>
+            if isTotal && nodeSpan.expandRightMax.size == nodeSpan.size
+            then 
+              Some((Tuple.fromArray(resultsArr).asInstanceOf[Result], nodeSpan))
+            else if !isTotal
+            then
+              Some((Tuple.fromArray(resultsArr).asInstanceOf[Result], nodeSpan))
+            else
+              failCase
+          case IncludeTupleCase(pattern) :: casesTl =>
+            pattern.runPattern(nodeSpan) match
+              case None => failCase
+              case Some((tpl, nodeSpan)) =>
+                (0 until tpl.size).foreach: i =>
+                  resultsArr(resultIdx + i) = tpl.productElement(i)
+                impl(casesTl, resultIdx = resultIdx + tpl.size, nodeSpan = nodeSpan, searchStack = searchStack)
+          case IncludeCase(pattern) :: casesTl =>
+            pattern.runPattern(nodeSpan) match
+              case None => failCase
+              case Some((elem, nodeSpan)) =>
+                resultsArr(resultIdx) = elem
+                impl(casesTl, resultIdx = resultIdx + 1, nodeSpan = nodeSpan, searchStack = searchStack)
+          case SkipCase(pattern) :: casesTl =>
+            pattern.runPattern(nodeSpan) match
+              case None => failCase
+              case Some((_, nodeSpan)) =>
+                impl(casesTl, resultIdx = resultIdx, nodeSpan = nodeSpan, searchStack = searchStack)
+          case WildcardCase :: casesTl =>
+            // If there is a right-ward position to try, add a search stack record
+            // where this wildcard evaluates there. If just ignoring this wildcard
+            // makes the pattern fail, then we will retry one spot to the right,
+            // including seeing this wildcard and adding another stack entry 1 further,
+            // and so on. The only case we don't retry is if we are at end of seq,
+            // and no right-ward step is possible.
+            val nextSearchStack =
+              nodeSpan.expandRightOption(1) match
+                case None => searchStack
+                case Some(nextNodeSpan) =>
+                  (
+                    resultIdx = resultIdx,
+                    nodeSpan = nextNodeSpan,
+                    cases = cases,
+                  ) :: searchStack
+            end nextSearchStack
+            impl(casesTl, resultIdx = resultIdx, nodeSpan = nodeSpan, searchStack = nextSearchStack)
+      end impl
+      
+      impl(cases, resultIdx = 0, nodeSpan = nodeSpan, searchStack = Nil)
     end runPattern
+  end Tupled
+
+  private[forja] object Tupled:
+    sealed trait Case
+
+    final case class IncludeTupleCase[T <: Tuple](pattern: Pattern[T]) extends Case
+    final case class IncludeCase[T](pattern: Pattern[T]) extends Case
+    final case class SkipCase[T](pattern: Pattern[T]) extends Case
+    object WildcardCase extends Case
   end Tupled
 
   private[forja] final class alt[T](val left: Pattern[T], val right: Pattern[T])
       extends Pattern[T]:
     private lazy val decisionTree = Query.DecisionTree.fromPattern(this)
-    def runPattern(nodeSpan: NodeSpan, dir: MatchDir): Option[(T, NodeSpan)] =
+    def runPattern(nodeSpan: NodeSpan): Option[(T, NodeSpan)] =
       // decisionTree.run(nodeSpan, _.runPattern(nodeSpan, left))
-      left.runPattern(nodeSpan, dir).orElse(right.runPattern(nodeSpan, dir))
+      left.runPattern(nodeSpan).orElse(right.runPattern(nodeSpan))
     end runPattern
   end alt
 
   private[forja] final class map[T, U](val pattern: Pattern[T], val fn: T => U)
       extends Pattern[U]:
-    def runPattern(nodeSpan: NodeSpan, dir: MatchDir): Option[(U, NodeSpan)] =
-      pattern.runPattern(nodeSpan, dir)
+    def runPattern(nodeSpan: NodeSpan): Option[(U, NodeSpan)] =
+      pattern.runPattern(nodeSpan)
         .map: (value, nodeSpan) =>
           (fn(value), nodeSpan)
     end runPattern
+    // FIXME: delete
+    override def toString(): String = pattern.toString()
   end map
 
   private[forja] final class tokenExact[T](
       val token: Token,
       val pattern: Pattern[T],
   ) extends Pattern[T]:
-    def runPattern(nodeSpan: NodeSpan, dir: MatchDir): Option[(T, NodeSpan)] =
-      dir match
-        case MatchDir.Left =>
-          nodeSpan.expandLeftOption(1) match
-            case Some(nodeSoan) if nodeSpan.head.tokenOption.contains(token) =>
-              pattern
-                .runPattern(nodeSpan.head.children.asEmptyNodeSpan, MatchDir.Right)
-                .map:
-                  case (value, _) => (value, nodeSpan)
-            case None | Some(_) => None
-        case MatchDir.Right =>
-          nodeSpan.expandRightOption(1) match
-            case Some(nodeSpan) if nodeSpan.last.tokenOption.contains(token) =>
-              pattern
-                .runPattern(nodeSpan.last.children.asEmptyNodeSpan, MatchDir.Right)
-                .map:
-                  case (value, _) => (value, nodeSpan)
-            case None | Some(_) => None
+    def runPattern(nodeSpan: NodeSpan): Option[(T, NodeSpan)] =
+      val sizeToLeft = nodeSpan.size
+      nodeSpan.expandRightOption(1) match
+        case Some(nodeSpan) if nodeSpan.last.tokenOption.contains(token) =>
+          pattern
+            .runPattern(nodeSpan.last.children.asEmptyNodeSpan)
+            .flatMap: (value, nodeSpan) =>
+              nodeSpan
+                .parentOption
+                .map(_.singletonNodeSpanHere)
+                .flatMap(_.expandLeftOption(sizeToLeft))
+                .map((value, _))
+        case None | Some(_) => None
     end runPattern
   end tokenExact
 
   private[forja] final class tokenAny[T](val pattern: Pattern[T])
       extends Pattern[T]:
-    def runPattern(nodeSpan: NodeSpan, dir: MatchDir): Option[(T, NodeSpan)] =
-      dir match
-        case MatchDir.Left =>
-          nodeSpan.expandLeftOption(1) match
-            case None           => None
-            case Some(nodeSpan) =>
-              pattern
-                .runPattern(nodeSpan.head.children.asEmptyNodeSpan, MatchDir.Right)
-                .map:
-                  case (value, _) => (value, nodeSpan)
-        case MatchDir.Right =>
-          nodeSpan.expandRightOption(1) match
-            case None           => None
-            case Some(nodeSpan) =>
-              pattern
-                .runPattern(nodeSpan.last.children.asEmptyNodeSpan, MatchDir.Right)
-                .map:
-                  case (value, _) => (value, nodeSpan)
+    def runPattern(nodeSpan: NodeSpan): Option[(T, NodeSpan)] =
+      val sizeToLeft = nodeSpan.size
+      nodeSpan.expandRightOption(1) match
+        case None           => None
+        case Some(nodeSpan) =>
+          pattern
+            .runPattern(nodeSpan.last.children.asEmptyNodeSpan)
+            .flatMap: (value, nodeSpan) =>
+              nodeSpan
+                .parentOption
+                .map(_.singletonNodeSpanHere)
+                .flatMap(_.expandLeftOption(sizeToLeft))
+                .map((value, _))
     end runPattern
   end tokenAny
 
   private[forja] final class not[T](val pattern: Pattern[T])
       extends Pattern[Unit]:
-    def runPattern(nodeSpan: NodeSpan, dir: MatchDir): Option[(Unit, NodeSpan)] =
-      pattern.runPattern(nodeSpan, dir) match
+    def runPattern(nodeSpan: NodeSpan): Option[(Unit, NodeSpan)] =
+      pattern.runPattern(nodeSpan) match
         case None    => Some(((), nodeSpan))
         case Some(_) => None
     end runPattern
   end not
 
-  private[forja] final class rewrite[T](
+  private[forja] final class rewriteMap[T, U](
       val pattern: Pattern[T],
-      val fn: T => Node | Iterable[Node] | syntax.skipRewrite.type,
-  ) extends Pattern[Unit]:
-    def runPattern(nodeSpan: NodeSpan, dir: MatchDir): Option[(Unit, NodeSpan)] =
-      pattern.runPattern(nodeSpan, dir).map: (value, nodeSpan) =>
+      val fn: T => (U, Node | Iterable[Node] | syntax.unchanged.type),
+  ) extends Pattern[U]:
+    def runPattern(nodeSpan: NodeSpan): Option[(U, NodeSpan)] =
+      val elementsToTheLeft = nodeSpan.size
+      pattern.runPattern(nodeSpan.drop(elementsToTheLeft)).map: (value, nodeSpan) =>
         val result = fn(value) match
-          case node: Node =>
-            ((), nodeSpan.replaceThis(List(node)))
-          case nodes: Iterable[Node] =>
-            ((), nodeSpan.replaceThis(nodes))
-          case syntax.skipRewrite =>
-            ((), nodeSpan)
+          case (u, node: Node) =>
+            (u, nodeSpan.replaceThis(List(node)))
+          case (u, nodes: Iterable[Node]) =>
+            (u, nodeSpan.replaceThis(nodes))
+          case (u, syntax.unchanged) =>
+            (u, nodeSpan)
 
-        // println(s"rewrite ${nodeSpan.parentOption}--> ${result._2.parentOption}")
-        result
+        (result._1, result._2.expandLeftOption(elementsToTheLeft).get)
     end runPattern
-  end rewrite
+  end rewriteMap
 
   private[forja] final class rep[T](val elem: Pattern[T])
       extends Pattern[List[T]]:
-    def runPattern(nodeSpan: NodeSpan, dir: MatchDir): Option[(List[T], NodeSpan)] =
+    def runPattern(nodeSpan: NodeSpan): Option[(List[T], NodeSpan)] =
       var shouldContinue = true
       var nodeSpanAcc = nodeSpan
       val resultAcc = mutable.ListBuffer[T]()
 
       while shouldContinue
       do
-        elem.runPattern(nodeSpanAcc, dir) match
+        elem.runPattern(nodeSpanAcc) match
           case None =>
             shouldContinue = false
           case Some((elem, nodeSpanAcc2)) =>
             resultAcc += elem
-            nodeSpanAcc = nodeSpanAcc
+            nodeSpanAcc = nodeSpanAcc2
       end while
       
-      dir match
-        case MatchDir.Left =>
-          return Some((resultAcc.reverseIterator.toList, nodeSpanAcc))
-        case MatchDir.Right =>
-          return Some((resultAcc.result(), nodeSpanAcc))
+      Some((resultAcc.result(), nodeSpanAcc))
     end runPattern
   end rep
 
   private[forja] final class embed[T: Node.Embed] extends Pattern[T]:
-    def runPattern(nodeSpan: NodeSpan, dir: MatchDir): Option[(T, NodeSpan)] =
-      dir match
-        case MatchDir.Left =>
-          nodeSpan.expandLeftOption(1).flatMap: nodeSpan =>
-            nodeSpan.last.valueOption.map((_, nodeSpan))
-        case MatchDir.Right =>
-          nodeSpan.expandRightOption(1).flatMap: nodeSpan =>
-            nodeSpan.last.valueOption.map((_, nodeSpan))
+    def runPattern(nodeSpan: NodeSpan): Option[(T, NodeSpan)] =
+      nodeSpan.expandRightOption(1).flatMap: nodeSpan =>
+        nodeSpan.last.valueOption[T].map((_, nodeSpan))
     end runPattern
   end embed
 
   private[forja] final class EmbedLiteralPattern[T: Node.Embed](value: T)
       extends Pattern[T]:
-    def runPattern(nodeSpan: NodeSpan, dir: MatchDir): Option[(T, NodeSpan)] =
-      dir match
-        case MatchDir.Left =>
-          nodeSpan.expandLeftOption(1).flatMap: nodeSpan =>
-            nodeSpan.last.valueOption[T] match
-              case Some(`value`) =>
-                Some((value, nodeSpan))
-              case None | Some(_) => None
-        case MatchDir.Right =>
-          nodeSpan.expandRightOption(1).flatMap: nodeSpan =>
-            nodeSpan.last.valueOption[T] match
-              case Some(`value`) =>
-                Some((value, nodeSpan))
-              case None | Some(_) => None
+    def runPattern(nodeSpan: NodeSpan): Option[(T, NodeSpan)] =
+      nodeSpan.expandRightOption(1).flatMap: nodeSpan =>
+        nodeSpan.last.valueOption[T] match
+          case Some(`value`) =>
+            Some((value, nodeSpan))
+          case None | Some(_) => None
     end runPattern
   end EmbedLiteralPattern
 
   private[forja] final class here[T](pattern: Pattern[Node], query: Query[T]) extends Pattern[T]:
-    def runPattern(nodeSpan: NodeSpan, dir: MatchDir): Option[(T, NodeSpan)] =
-      pattern.runPattern(nodeSpan, dir).flatMap: (node, nodeSpan) =>
+    def runPattern(nodeSpan: NodeSpan): Option[(T, NodeSpan)] =
+      pattern.runPattern(nodeSpan).flatMap: (node, nodeSpan) =>
         query.runQuery(node).value.map((_, nodeSpan))
     end runPattern
   end here

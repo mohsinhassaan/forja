@@ -6,7 +6,6 @@ import cats.{Alternative, Eval, Foldable}
 import forja.util.ReflectiveEnumeration
 
 import scala.collection.mutable
-import scala.quoted.{Expr, Quotes, Varargs}
 import scala.reflect.TypeTest
 
 import Query.*
@@ -57,44 +56,40 @@ object Query:
 
   final class on[+T](val pattern: Pattern[T]) extends Query[T]:
     protected def runQueryImpl(node: Node): Eval[Option[T]] =
-      Eval.now(pattern.runPattern(node.emptyNodeSpanHere, Pattern.MatchDir.Right).map(_._1))
+      Eval.now(pattern.runPattern(node.emptyNodeSpanHere).map(_._1))
     end runQueryImpl
 
     def rewrite[U >: T](
-        fn: Context.ValueContext ?=> U => Node | Iterable[Node] | syntax.skipRewrite.type,
+        fn: syntax.ValueContext.type ?=> U => Node | Iterable[Node] | syntax.unchanged.type,
     ): rewrite[U] =
       new rewrite(pattern, fn)
     end rewrite
   end on
 
   object on:
-    transparent inline def apply(
-        inline args: (Context.PatternContext ?=> Any)*,
-    ): on[Any] =
-      ${ applyImpl('args) }
-    end apply
+    private type C = syntax.PatternContext.type
+    private given C = syntax.PatternContext
 
-    private def applyImpl(argsExpr: Expr[Seq[Context.PatternContext ?=> Any]])(using
-        Quotes,
-    ): Expr[on[Any]] =
-      argsExpr match
-        case Varargs(argExprs) =>
-          val preprocessedArgs = argExprs.map: argExpr =>
-            Expr.betaReduce('{ $argExpr(using Context.PatternContext) })
-          '{
-            given Context.PatternContext = Context.PatternContext
-            ${
-              NodeSpan.applyImpl(Varargs(preprocessedArgs)) match
-                case '{ $pattern: Pattern[t] } =>
-                  '{ new on[t]($pattern) }
-            }
-          }
-    end applyImpl
+    inline def applyTupled[Tp <: Tuple, U](arg: C ?=> Tp)(using app: syntax.PatternContext.NodeSpanApply[Tp, Pattern[U]]): on[U] =
+      new on[U](app(arg))
+
+    // format: off
+    inline def apply[U]()(using app: syntax.PatternContext.NodeSpanApply[EmptyTuple, Pattern[U]]): on[U] = new on[U](app(EmptyTuple))
+    inline def apply[T1, U](t1: C ?=> T1)(using app: syntax.PatternContext.NodeSpanApply[Tuple1[T1], Pattern[U]]): on[U] = new on[U](app(Tuple1(t1)))
+    // %%replicate22
+    inline def apply[T1, T2, U](t1: C ?=> T1, t2: C ?=> T2)(using app: syntax.PatternContext.NodeSpanApply[(T1, T2), Pattern[U]]): on[U] = new on[U](app((t1, t2)))
+    inline def apply[T1, T2, T3, U](t1: C ?=> T1, t2: C ?=> T2, t3: C ?=> T3)(using app: syntax.PatternContext.NodeSpanApply[(T1, T2, T3), Pattern[U]]): on[U] = new on[U](app((t1, t2, t3)))
+    inline def apply[T1, T2, T3, T4, U](t1: C ?=> T1, t2: C ?=> T2, t3: C ?=> T3, t4: C ?=> T4)(using app: syntax.PatternContext.NodeSpanApply[(T1, T2, T3, T4), Pattern[U]]): on[U] = new on[U](app((t1, t2, t3, t4)))
+    inline def apply[T1, T2, T3, T4, T5, U](t1: C ?=> T1, t2: C ?=> T2, t3: C ?=> T3, t4: C ?=> T4, t5: C ?=> T5)(using app: syntax.PatternContext.NodeSpanApply[(T1, T2, T3, T4, T5), Pattern[U]]): on[U] = new on[U](app((t1, t2, t3, t4, t5)))
+    inline def apply[T1, T2, T3, T4, T5, T6, U](t1: C ?=> T1, t2: C ?=> T2, t3: C ?=> T3, t4: C ?=> T4, t5: C ?=> T5, t6: C ?=> T6)(using app: syntax.PatternContext.NodeSpanApply[(T1, T2, T3, T4, T5, T6), Pattern[U]]): on[U] = new on[U](app((t1, t2, t3, t4, t5, t6)))
+    inline def apply[T1, T2, T3, T4, T5, T6, T7, U](t1: C ?=> T1, t2: C ?=> T2, t3: C ?=> T3, t4: C ?=> T4, t5: C ?=> T5, t6: C ?=> T6, t7: C ?=> T7)(using app: syntax.PatternContext.NodeSpanApply[(T1, T2, T3, T4, T5, T6, T7), Pattern[U]]): on[U] = new on[U](app((t1, t2, t3, t4, t5, t6, t7)))
+    inline def apply[T1, T2, T3, T4, T5, T6, T7, T8, U](t1: C ?=> T1, t2: C ?=> T2, t3: C ?=> T3, t4: C ?=> T4, t5: C ?=> T5, t6: C ?=> T6, t7: C ?=> T7, t8: C ?=> T8)(using app: syntax.PatternContext.NodeSpanApply[(T1, T2, T3, T4, T5, T6, T7, T8), Pattern[U]]): on[U] = new on[U](app((t1, t2, t3, t4, t5, t6, t7, t8)))
+    // format: on
   end on
 
   final class rewrite[T](
       srcPattern: Pattern[T],
-      fn: Context.ValueContext ?=> T => Node | Iterable[Node] | syntax.skipRewrite.type,
+      fn: syntax.ValueContext.type ?=> T => Node | Iterable[Node] | syntax.unchanged.type,
   ) extends ReflectiveEnumeration.Enumerable:
     val pattern = srcPattern.rewrite(fn)
   end rewrite
@@ -147,21 +142,22 @@ object Query:
         pattern: Pattern[?],
     ): Chain[Either[RecordList[T, Q], RecordList[T, Q]]] =
       pattern match
-        case pattern: Pattern.Tupled =>
-          pattern.elems.foldLeft(
-            Chain.one(Right(buf): Either[RecordList[T, Q], RecordList[T, Q]]),
-          ): (acc, elem) =>
-            acc.flatMap:
-              case Left(buf)  => Chain.one(Left(buf))
-              case Right(buf) =>
-                elem match
-                  case pattern: Pattern[?] =>
-                    scanPattern(buf, pattern)
-                  case include: Pattern.Include[?] =>
-                    scanPattern(buf, include.pattern)
-                  case (_: Token, _) =>
-                    // attrs have no impact on decision tree
-                    Chain.one(Right(buf))
+        case pattern: Pattern.Tupled[?] =>
+          ???
+          // pattern.elems.foldLeft(
+          //   Chain.one(Right(buf): Either[RecordList[T, Q], RecordList[T, Q]]),
+          // ): (acc, elem) =>
+          //   acc.flatMap:
+          //     case Left(buf)  => Chain.one(Left(buf))
+          //     case Right(buf) =>
+          //       elem match
+          //         case pattern: Pattern[?] =>
+          //           scanPattern(buf, pattern)
+          //         case include: Pattern.Include[?] =>
+          //           scanPattern(buf, include.pattern)
+          //         case (_: Token, _) =>
+          //           // attrs have no impact on decision tree
+          //           Chain.one(Right(buf))
         case pattern: Pattern.alt[?] =>
           scanPattern(buf, pattern.left)
             ++ scanPattern(buf, pattern.right)
@@ -169,7 +165,7 @@ object Query:
           scanPattern(buf, pattern.pattern)
         case pattern: Pattern.tokenExact[?] =>
           Chain.one(Right(buf.ensureBranch.upsert(pattern.token)))
-        case _: (Pattern.tokenAny[?] | Pattern.rep[?] | Pattern.rewrite[?]) =>
+        case _: (Pattern.tokenAny[?] | Pattern.rep[?] | Pattern.rewriteMap[?, ?]) =>
           Chain.one(Left(buf))
         case _: Pattern.embed[?] =>
           Chain.one(Left(buf))

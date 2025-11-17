@@ -30,7 +30,7 @@ object Pass:
           nodeSpan: NodeSpan,
           madeChangesThisIteration: Boolean,
       ): NodeSpan =
-        rewritesAgg.runPattern(nodeSpan, Pattern.MatchDir.Right) match
+        rewritesAgg.runPattern(nodeSpan) match
           case None =>
             assert(nodeSpan.isEmpty)
             def firstChild = nodeSpan

@@ -19,6 +19,7 @@ trait ForjaModule extends ScalaModule, ScalafixModule:
     "-feature",
     "-source:future",
     "-Xcheck-macros",
+    "-explain-cyclic",
   )
   override def forkArgs = super.forkArgs() ++ Seq(
     // TODO: fix when Scala 3.8?
@@ -32,6 +33,7 @@ trait ForjaModule extends ScalaModule, ScalafixModule:
     def testFramework = "utest.runner.Framework"
     override def forkArgs = super.forkArgs() ++ Seq(
       "--sun-misc-unsafe-memory-access=allow",
+      // "-agentlib:jdwp=transport=dt_socket,server=y,address=5005,suspend=y",
     )
   end ForjaTests
 end ForjaModule

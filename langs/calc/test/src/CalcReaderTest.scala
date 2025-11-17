@@ -16,6 +16,25 @@ class CalcReaderTest extends TestSuite:
   end parseString
 
   val tests = Tests:
+    test("popByte") {
+      CalcReader.readTokens
+        .popByte
+        .pattern
+        .runPattern:
+          CalcReader.Input.Root(
+            CalcReader.Input.ParseHead(),
+            SourceRange("42")
+          )
+            .children
+            .asEmptyNodeSpan
+      ==> Some((), CalcReader.Input.Root(
+            CalcReader.Input.ParseHead(),
+            '4'.toByte,
+            '2'.toByte,
+            SourceRange(""),
+          ).children.asEmptyNodeSpan.expandRightMax)
+    }
+
     test("2 + 2") {
       parseString() ==> CalcReader.Tokenized.Root(
         CalcReader.Tokenized.Number(2),

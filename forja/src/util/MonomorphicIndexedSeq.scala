@@ -30,4 +30,14 @@ trait MonomorphicIndexedSeq[+T, C <: MonomorphicIndexedSeq[T, C]]
 
   final override def take(n: Int): C = slice(0, n)
   final override def takeRight(n: Int): C = slice(length - n, length)
+
+  final override def takeWhile(pred: T => Boolean): C =
+    val count = iterator.takeWhile(pred).size
+    take(count)
+  end takeWhile
+
+  final override def dropWhile(pred: T => Boolean): C =
+    val count = iterator.takeWhile(pred).size
+    drop(count)
+  end dropWhile
 end MonomorphicIndexedSeq

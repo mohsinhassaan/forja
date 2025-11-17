@@ -3,15 +3,14 @@ package forja
 import forja.util.{FastPatchTree, MonomorphicIndexedSeq}
 
 import scala.annotation.publicInBinary
-import scala.collection.{concurrent, mutable}
+import scala.collection.concurrent
 import scala.compiletime.asMatchable
-import scala.quoted.{Expr, Quotes, Type, Varargs, quotes}
 import scala.reflect.TypeTest
 
 import Node.*
 
 final class Node @publicInBinary private[forja] (
-    private val impl: Node.NodeImpl,
+    private[forja] val impl: Node.NodeImpl,
     private val nodeParentInfo: NodeParentInfo,
 ):
   /* Regular nodeParentInfo may not refer to a parent that refers back to impl.
@@ -140,6 +139,13 @@ final class Node @publicInBinary private[forja] (
       SingletonNodeSpan(this, false)
   end emptyNodeSpanHere
 
+  def singletonNodeSpanHere: NodeSpan = nodeParentInfoStable match
+    case NodeParentInfo.IndexParent(parent, index) =>
+      IndexedParentNodeSpan(parent, index, 1)
+    case _: (NodeParentInfo.AttrParent | NodeParentInfo.Orphan.type) =>
+      SingletonNodeSpan(this, true)
+  end singletonNodeSpanHere
+
   def query[T](query: Query[T]): Option[T] =
     query.runQuery(this).value
   end query
@@ -186,109 +192,20 @@ object Node:
     )
   end error
 
-  type NodeApplyArg = Node | (Token, Node) | IterableOnce[Node]
+  inline def applyTupled[Tp <: Tuple, U](tp: Tp)(using ctx: syntax.Context)(using app: ctx.NodeApply[Tp, U]): U = app(tp)
 
-  type PatternApplyArg[T] = Pattern[T] | Pattern.Include[T] |
-    syntax.`...` | (Token, Pattern[T] | Pattern.Include[T])
-
-  transparent inline def apply(inline args: Any*): Node | Pattern[Any] =
-    ${ applyImpl('args) }
-  end apply
-
-  private[forja] def applyImpl(argsExpr: Expr[Seq[Any]])(using
-      Quotes,
-  ): Expr[Node | Pattern[Any]] =
-    import quotes.reflect.*
-    Context.dispatchImpl(
-      patFn = {
-        argsExpr match
-          case Varargs(Seq('{ $token: Token }, args*)) =>
-            NodeSpan.applyImpl(Varargs(args)) match
-              case '{ $pattern: Pattern[t] } =>
-                '{ Pattern.tokenExact[t]($token, $pattern) }
-          case Varargs(args) =>
-            NodeSpan.applyImpl(Varargs(args)) match
-              case '{ $pattern: Pattern[t] } =>
-                '{ Pattern.tokenAny[t]($pattern) }
-      },
-      vFn = {
-        argsExpr match
-          case Varargs(argExprs) =>
-            val tokenExpr = argExprs.head match
-              case '{ $expr: Token } => expr
-              case '{ $expr: t }     =>
-                report.errorAndAbort(
-                  s"${Type.show[t]} should match ${Type.show[Token]}",
-                  expr,
-                )
-            end tokenExpr
-
-            val children =
-              Seq.newBuilder[Expr[NodeImpl | IterableOnce[NodeImpl]]]
-            val attrs = Seq.newBuilder[Expr[(Token, NodeImpl)]]
-            argExprs.tail.foreach:
-              case '{ $expr: Node } =>
-                children += '{ $expr.impl }
-              case '{ $expr: (Token, Node) } =>
-                attrs += '{
-                  val pair = $expr
-                  (pair._1, pair._2.impl)
-                }
-              case '{ $expr: IterableOnce[Node] } =>
-                children += '{ $expr.iterator.map(_.impl) }
-              case '{ $expr: t & Matchable } =>
-                Expr.summon[Node.Embed[t & Matchable]] match
-                  case None =>
-                    report.errorAndAbort(
-                      s"${Type.show[t]} should match ${Type.show[Node.NodeApplyArg]} or derive ${Type.show[Node.Embed[t]]}",
-                      expr,
-                    )
-                  case Some(embed) =>
-                    children += '{
-                      Node.embed[t & Matchable]($expr)(using $embed).impl
-                    }
-            val childrenSeq = children.result()
-
-            val childrenExpr =
-              if childrenSeq.forall(_.isExprOf[NodeImpl])
-              then
-                '{
-                  FastPatchTree(${
-                    Varargs(childrenSeq.map(_.asExprOf[NodeImpl]))
-                  }*)
-                }
-              else
-                '{
-                  val buf = FastPatchTree.newBuilder[NodeImpl]
-                  ${
-                    childrenSeq.foldRight('{ buf.result() }): (expr, acc) =>
-                      expr match
-                        case '{ $expr: NodeImpl } =>
-                          '{
-                            buf += $expr
-                            $acc
-                          }
-                        case '{ $expr: IterableOnce[NodeImpl] } =>
-                          '{
-                            buf ++= $expr
-                            $acc
-                          }
-                  }
-                }
-            end childrenExpr
-            '{
-              new Node(
-                impl = NodeImpl.TokenNode(
-                  token = $tokenExpr,
-                  children = $childrenExpr,
-                  attrs = Map(${ Varargs(attrs.result()) }*),
-                ),
-                nodeParentInfo = NodeParentInfo.Orphan,
-              )
-            }
-      },
-    )
-  end applyImpl
+  // format: off
+  inline def apply[U]()(using ctx: syntax.Context)(using app: ctx.NodeApply[EmptyTuple, U]): U = app(EmptyTuple)
+  inline def apply[T1, U](t1: T1)(using ctx: syntax.Context)(using app: ctx.NodeApply[Tuple1[T1], U]): U = app(Tuple1(t1))
+  // %%replicate22
+  inline def apply[T1, T2, U](t1: T1, t2: T2)(using ctx: syntax.Context)(using app: ctx.NodeApply[(T1, T2), U]): U = app((t1, t2))
+  inline def apply[T1, T2, T3, U](t1: T1, t2: T2, t3: T3)(using ctx: syntax.Context)(using app: ctx.NodeApply[(T1, T2, T3), U]): U = app((t1, t2, t3))
+  inline def apply[T1, T2, T3, T4, U](t1: T1, t2: T2, t3: T3, t4: T4)(using ctx: syntax.Context)(using app: ctx.NodeApply[(T1, T2, T3, T4), U]): U = app((t1, t2, t3, t4))
+  inline def apply[T1, T2, T3, T4, T5, U](t1: T1, t2: T2, t3: T3, t4: T4, t5: T5)(using ctx: syntax.Context)(using app: ctx.NodeApply[(T1, T2, T3, T4, T5), U]): U = app((t1, t2, t3, t4, t5))
+  inline def apply[T1, T2, T3, T4, T5, T6, U](t1: T1, t2: T2, t3: T3, t4: T4, t5: T5, t6: T6)(using ctx: syntax.Context)(using app: ctx.NodeApply[(T1, T2, T3, T4, T5, T6), U]): U = app((t1, t2, t3, t4, t5, t6))
+  inline def apply[T1, T2, T3, T4, T5, T6, T7, U](t1: T1, t2: T2, t3: T3, t4: T4, t5: T5, t6: T6, t7: T7)(using ctx: syntax.Context)(using app: ctx.NodeApply[(T1, T2, T3, T4, T5, T6, T7), U]): U = app((t1, t2, t3, t4, t5, t6, t7))
+  inline def apply[T1, T2, T3, T4, T5, T6, T7, T8, U](t1: T1, t2: T2, t3: T3, t4: T4, t5: T5, t6: T6, t7: T7, t8: T8)(using ctx: syntax.Context)(using app: ctx.NodeApply[(T1, T2, T3, T4, T5, T6, T7, T8), U]): U = app((t1, t2, t3, t4, t5, t6, t7, t8))
+  // format: on
 
   trait Embed[T]:
     def extractOption(value: Matchable): Option[T]
@@ -373,6 +290,10 @@ object Node:
     def asEmptyNodeSpan: NodeSpan =
       IndexedParentNodeSpan(parent, 0, 0)
     end asEmptyNodeSpan
+
+    def asNodeSpan: NodeSpan =
+      IndexedParentNodeSpan(parent, 0, length)
+    end asNodeSpan
   end NodeChildren
 
   final class NodeAttrs private[Node] (parent: Node) extends Map[Token, Node]:
@@ -414,102 +335,20 @@ object Node:
   end NodeSpan
 
   object NodeSpan:
-    transparent inline def apply(
-        inline args: Any*,
-    ): Pattern[Any] | Iterable[Node] =
-      ${ applyImpl('args) }
-    end apply
+    inline def applyTupled[Tp <: Tuple, U](tp: Tp)(using ctx: syntax.Context)(using app: ctx.NodeSpanApply[Tp, U]): U = app(tp)
 
-    private[forja] def applyImpl(argsExpr: Expr[Seq[Any]])(using
-        Quotes,
-    ): Expr[Pattern[Any] | Iterable[Node]] =
-      import quotes.reflect.*
-      argsExpr match
-        case Varargs(argExprs) =>
-          Context.dispatchImpl(
-            patFn = {
-              val checkedArgs = argExprs.map:
-                case '{ $arg: PatternApplyArg[t] } => arg
-                case '{ $arg: t }                  =>
-                  Expr.summon[Node.Embed[t]] match
-                    case None =>
-                      report.errorAndAbort(
-                        s"${Type.show[t]} should match ${Type.show[PatternApplyArg[Any]]} or derive ${Type.show[Node.Embed[t]]}",
-                        arg,
-                      )
-                    case Some(embed) =>
-                      '{
-                        new Pattern.EmbedLiteralPattern[t]($arg)(using $embed)
-                      }
-              end checkedArgs
-              val includes = checkedArgs.collect:
-                case '{ $_ : Pattern.Include[t] }          => '{ ??? : t }
-                case '{ $_ : (Token, Pattern.Include[t]) } => '{ ??? : t }
-              end includes
-
-              Expr.ofTupleFromSeq(includes) match
-                case '{ $_ : EmptyTuple } =>
-                  '{ Pattern.Tupled(${ Varargs(checkedArgs) }*).map(_ => ()) }
-                case '{ $_ : Tuple1[t] } =>
-                  '{
-                    Pattern
-                      .Tupled(${ Varargs(checkedArgs) }*)
-                      .asInstanceOf[Pattern[Tuple1[t]]]
-                      .map(_._1)
-                  }
-                case '{ $_ : includesTuple } =>
-                  '{
-                    Pattern
-                      .Tupled(${ Varargs(checkedArgs) }*)
-                      .asInstanceOf[Pattern[Tuple & includesTuple]]
-                  }
-            },
-            vFn = {
-              def err[T: Type](v: Expr[T])(using Quotes): Nothing =
-                report.errorAndAbort(
-                  s"${Type.show[T]} should match ${Type.show[Node | IterableOnce[Node]]} or derive ${Type.show[Node.Embed[T]]}",
-                  v,
-                )
-              end err
-              '{
-                val buf = mutable.ListBuffer[Node]()
-                ${
-                  def impl(exprs: Seq[Expr[Any]])(using
-                      Quotes,
-                  ): Expr[List[Node]] =
-                    exprs match
-                      case Seq() =>
-                        '{ buf.result() }
-                      case Seq(hd, tl*) =>
-                        hd match
-                          case '{ $node: Node } =>
-                            '{
-                              buf += $node
-                              ${ impl(tl) }
-                            }
-                          case '{ $nodes: IterableOnce[Node] } =>
-                            '{
-                              buf ++= $nodes
-                              ${ impl(tl) }
-                            }
-                          case '{ $v: t & Matchable } =>
-                            Expr.summon[Node.Embed[t & Matchable]] match
-                              case Some(emb) =>
-                                '{
-                                  buf += Node.embed($v)(using $emb)
-                                  ${ impl(tl) }
-                                }
-                              case None =>
-                                err(v)
-                          case '{ $v: t } =>
-                            err(v)
-                  end impl
-                  impl(argExprs)
-                }
-              }
-            },
-          )
-    end applyImpl
+    // format: off
+    inline def apply[U]()(using ctx: syntax.Context)(using app: ctx.NodeSpanApply[EmptyTuple, U]): U = app(EmptyTuple)
+    inline def apply[T1, U](t1: T1)(using ctx: syntax.Context)(using app: ctx.NodeSpanApply[Tuple1[T1], U]): U = app(Tuple1(t1))
+    // %%replicate22
+    inline def apply[T1, T2, U](t1: T1, t2: T2)(using ctx: syntax.Context)(using app: ctx.NodeSpanApply[(T1, T2), U]): U = app((t1, t2))
+    inline def apply[T1, T2, T3, U](t1: T1, t2: T2, t3: T3)(using ctx: syntax.Context)(using app: ctx.NodeSpanApply[(T1, T2, T3), U]): U = app((t1, t2, t3))
+    inline def apply[T1, T2, T3, T4, U](t1: T1, t2: T2, t3: T3, t4: T4)(using ctx: syntax.Context)(using app: ctx.NodeSpanApply[(T1, T2, T3, T4), U]): U = app((t1, t2, t3, t4))
+    inline def apply[T1, T2, T3, T4, T5, U](t1: T1, t2: T2, t3: T3, t4: T4, t5: T5)(using ctx: syntax.Context)(using app: ctx.NodeSpanApply[(T1, T2, T3, T4, T5), U]): U = app((t1, t2, t3, t4, t5))
+    inline def apply[T1, T2, T3, T4, T5, T6, U](t1: T1, t2: T2, t3: T3, t4: T4, t5: T5, t6: T6)(using ctx: syntax.Context)(using app: ctx.NodeSpanApply[(T1, T2, T3, T4, T5, T6), U]): U = app((t1, t2, t3, t4, t5, t6))
+    inline def apply[T1, T2, T3, T4, T5, T6, T7, U](t1: T1, t2: T2, t3: T3, t4: T4, t5: T5, t6: T6, t7: T7)(using ctx: syntax.Context)(using app: ctx.NodeSpanApply[(T1, T2, T3, T4, T5, T6, T7), U]): U = app((t1, t2, t3, t4, t5, t6, t7))
+    inline def apply[T1, T2, T3, T4, T5, T6, T7, T8, U](t1: T1, t2: T2, t3: T3, t4: T4, t5: T5, t6: T6, t7: T7, t8: T8)(using ctx: syntax.Context)(using app: ctx.NodeSpanApply[(T1, T2, T3, T4, T5, T6, T7, T8), U]): U = app((t1, t2, t3, t4, t5, t6, t7, t8))
+    // format: on
   end NodeSpan
 
   private final class SingletonNodeSpan(node: Node, includesMe: Boolean)
@@ -573,11 +412,12 @@ object Node:
     end apply
 
     protected def sliceImpl(from: Int, until: Int): NodeSpan =
-      val slicedIndices = indices.slice(from, until)
+      val indicesInParent = parent.children.indices.slice(start, start + length)
+      val slicedIndices = indicesInParent.slice(from, until)
       IndexedParentNodeSpan(
         parent,
-        slicedIndices.headOption.getOrElse(0),
-        slicedIndices.size,
+        slicedIndices.headOption.getOrElse((start + from).max(start + slicedIndices.length)),
+        slicedIndices.length,
       )
     end sliceImpl
 
