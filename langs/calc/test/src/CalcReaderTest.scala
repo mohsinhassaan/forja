@@ -17,22 +17,28 @@ class CalcReaderTest extends TestSuite:
 
   val tests = Tests:
     test("popByte") {
-      CalcReader.readTokens
-        .popByte
-        .pattern
+      CalcReader.readTokens.popByte.pattern
         .runPattern:
-          CalcReader.Input.Root(
-            CalcReader.Input.ParseHead(),
-            SourceRange("42")
-          )
+          CalcReader.Input
+            .Root(
+              CalcReader.Input.ParseHead(),
+              SourceRange("42"),
+            )
             .children
             .asEmptyNodeSpan
-      ==> Some((), CalcReader.Input.Root(
+      ==> Some(
+        (),
+        CalcReader.Input
+          .Root(
             CalcReader.Input.ParseHead(),
             '4'.toByte,
             '2'.toByte,
             SourceRange(""),
-          ).children.asEmptyNodeSpan.expandRightMax)
+          )
+          .children
+          .asEmptyNodeSpan
+          .expandRightMax,
+      )
     }
 
     test("2 + 2") {

@@ -8,6 +8,7 @@ package build
 import com.goyeau.mill.scalafix.ScalafixModule
 import mill.*, scalalib.*
 import mill.api.Task.Simple
+import mill.api.TaskCtx
 
 trait ForjaModule extends ScalaModule, ScalafixModule:
   def scalaVersion = "3.7.3"
@@ -45,4 +46,67 @@ object forja extends ForjaModule:
     mvn"org.typelevel::cats-core:2.13.0",
   )
   object test extends ForjaTests
+
+  private enum State:
+    case Normal, NextLineIsTemplate
+    case IsReplacing(count: Int)
+
+  def updateLimit22Apply(check: Boolean = false) = Task.Command:
+    allSourceFiles().foreach: src =>
+      var didReplace = false
+      var state = State.Normal
+      val replacedLines =
+        os.read.lines
+          .stream(src.path)
+          .flatMap:
+            case line @ s"$_// %%replicate22" if state == State.Normal =>
+              didReplace = true
+              state = State.NextLineIsTemplate
+              List(line)
+            case line if state == State.NextLineIsTemplate =>
+              state = State.IsReplacing(0)
+              var template = line
+              line +: (3 to 22).map: i =>
+                template = template
+                  .replace(s"T${i - 1}, U]", s"T${i - 1}, T$i, U]")
+                  .replace(
+                    s"t${i - 1}: T${i - 1})",
+                    s"t${i - 1}: T${i - 1}, t$i: T$i)",
+                  )
+                  .replace(
+                    s"t${i - 1}: C ?=> T${i - 1})",
+                    s"t${i - 1}: C ?=> T${i - 1}, t$i: C ?=> T$i)",
+                  )
+                  .replace(s"T${i - 1})", s"T${i - 1}, T$i)")
+                  .replace(s"t${i - 1})", s"t${i - 1}, t$i)")
+                template
+            case line @ s"$_// format: on"
+                if state.isInstanceOf[State.IsReplacing] =>
+              state = State.Normal
+              List(line)
+            case line if state.isInstanceOf[State.IsReplacing] =>
+              assert(state.asInstanceOf[State.IsReplacing].count <= 20)
+              state = State.IsReplacing(
+                state.asInstanceOf[State.IsReplacing].count + 1,
+              )
+              Nil
+            case line if state == State.Normal =>
+              List(line)
+            case line =>
+              assert(false, s"(in state $state) $line")
+          .toSeq
+
+      if check && didReplace && replacedLines != os.read.lines(src.path)
+      then TaskCtx.taskCtx.fail(s"out of date: ${src.path}")
+      if check
+      then println(s"ok ${src.path}")
+      else if didReplace
+      then
+        println(s"rewrite ${src.path}")
+        os.write.over(
+          src.path,
+          replacedLines.view.flatMap(line => List(line, System.lineSeparator())),
+        )
+      else println(s"no change ${src.path}")
+  end updateLimit22Apply
 end forja

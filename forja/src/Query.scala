@@ -60,7 +60,8 @@ object Query:
     end runQueryImpl
 
     def rewrite[U >: T](
-        fn: syntax.ValueContext.type ?=> U => Node | Iterable[Node] | syntax.unchanged.type,
+        fn: syntax.ValueContext.type ?=> U => Node | Iterable[Node] |
+          syntax.unchanged.type,
     ): rewrite[U] =
       new rewrite(pattern, fn)
     end rewrite
@@ -70,7 +71,9 @@ object Query:
     private type C = syntax.PatternContext.type
     private given C = syntax.PatternContext
 
-    inline def applyTupled[Tp <: Tuple, U](arg: C ?=> Tp)(using app: syntax.PatternContext.NodeSpanApply[Tp, Pattern[U]]): on[U] =
+    inline def applyTupled[Tp <: Tuple, U](arg: C ?=> Tp)(using
+        app: syntax.PatternContext.NodeSpanApply[Tp, Pattern[U]],
+    ): on[U] =
       new on[U](app(arg))
 
     // format: off
@@ -84,12 +87,27 @@ object Query:
     inline def apply[T1, T2, T3, T4, T5, T6, U](t1: C ?=> T1, t2: C ?=> T2, t3: C ?=> T3, t4: C ?=> T4, t5: C ?=> T5, t6: C ?=> T6)(using app: syntax.PatternContext.NodeSpanApply[(T1, T2, T3, T4, T5, T6), Pattern[U]]): on[U] = new on[U](app((t1, t2, t3, t4, t5, t6)))
     inline def apply[T1, T2, T3, T4, T5, T6, T7, U](t1: C ?=> T1, t2: C ?=> T2, t3: C ?=> T3, t4: C ?=> T4, t5: C ?=> T5, t6: C ?=> T6, t7: C ?=> T7)(using app: syntax.PatternContext.NodeSpanApply[(T1, T2, T3, T4, T5, T6, T7), Pattern[U]]): on[U] = new on[U](app((t1, t2, t3, t4, t5, t6, t7)))
     inline def apply[T1, T2, T3, T4, T5, T6, T7, T8, U](t1: C ?=> T1, t2: C ?=> T2, t3: C ?=> T3, t4: C ?=> T4, t5: C ?=> T5, t6: C ?=> T6, t7: C ?=> T7, t8: C ?=> T8)(using app: syntax.PatternContext.NodeSpanApply[(T1, T2, T3, T4, T5, T6, T7, T8), Pattern[U]]): on[U] = new on[U](app((t1, t2, t3, t4, t5, t6, t7, t8)))
+    inline def apply[T1, T2, T3, T4, T5, T6, T7, T8, T9, U](t1: C ?=> T1, t2: C ?=> T2, t3: C ?=> T3, t4: C ?=> T4, t5: C ?=> T5, t6: C ?=> T6, t7: C ?=> T7, t8: C ?=> T8, t9: C ?=> T9)(using app: syntax.PatternContext.NodeSpanApply[(T1, T2, T3, T4, T5, T6, T7, T8, T9), Pattern[U]]): on[U] = new on[U](app((t1, t2, t3, t4, t5, t6, t7, t8, t9)))
+    inline def apply[T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, U](t1: C ?=> T1, t2: C ?=> T2, t3: C ?=> T3, t4: C ?=> T4, t5: C ?=> T5, t6: C ?=> T6, t7: C ?=> T7, t8: C ?=> T8, t9: C ?=> T9, t10: C ?=> T10)(using app: syntax.PatternContext.NodeSpanApply[(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10), Pattern[U]]): on[U] = new on[U](app((t1, t2, t3, t4, t5, t6, t7, t8, t9, t10)))
+    inline def apply[T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, U](t1: C ?=> T1, t2: C ?=> T2, t3: C ?=> T3, t4: C ?=> T4, t5: C ?=> T5, t6: C ?=> T6, t7: C ?=> T7, t8: C ?=> T8, t9: C ?=> T9, t10: C ?=> T10, t11: C ?=> T11)(using app: syntax.PatternContext.NodeSpanApply[(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11), Pattern[U]]): on[U] = new on[U](app((t1, t2, t3, t4, t5, t6, t7, t8, t9, t10, t11)))
+    inline def apply[T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, U](t1: C ?=> T1, t2: C ?=> T2, t3: C ?=> T3, t4: C ?=> T4, t5: C ?=> T5, t6: C ?=> T6, t7: C ?=> T7, t8: C ?=> T8, t9: C ?=> T9, t10: C ?=> T10, t11: C ?=> T11, t12: C ?=> T12)(using app: syntax.PatternContext.NodeSpanApply[(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12), Pattern[U]]): on[U] = new on[U](app((t1, t2, t3, t4, t5, t6, t7, t8, t9, t10, t11, t12)))
+    inline def apply[T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, U](t1: C ?=> T1, t2: C ?=> T2, t3: C ?=> T3, t4: C ?=> T4, t5: C ?=> T5, t6: C ?=> T6, t7: C ?=> T7, t8: C ?=> T8, t9: C ?=> T9, t10: C ?=> T10, t11: C ?=> T11, t12: C ?=> T12, t13: C ?=> T13)(using app: syntax.PatternContext.NodeSpanApply[(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13), Pattern[U]]): on[U] = new on[U](app((t1, t2, t3, t4, t5, t6, t7, t8, t9, t10, t11, t12, t13)))
+    inline def apply[T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, U](t1: C ?=> T1, t2: C ?=> T2, t3: C ?=> T3, t4: C ?=> T4, t5: C ?=> T5, t6: C ?=> T6, t7: C ?=> T7, t8: C ?=> T8, t9: C ?=> T9, t10: C ?=> T10, t11: C ?=> T11, t12: C ?=> T12, t13: C ?=> T13, t14: C ?=> T14)(using app: syntax.PatternContext.NodeSpanApply[(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14), Pattern[U]]): on[U] = new on[U](app((t1, t2, t3, t4, t5, t6, t7, t8, t9, t10, t11, t12, t13, t14)))
+    inline def apply[T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, U](t1: C ?=> T1, t2: C ?=> T2, t3: C ?=> T3, t4: C ?=> T4, t5: C ?=> T5, t6: C ?=> T6, t7: C ?=> T7, t8: C ?=> T8, t9: C ?=> T9, t10: C ?=> T10, t11: C ?=> T11, t12: C ?=> T12, t13: C ?=> T13, t14: C ?=> T14, t15: C ?=> T15)(using app: syntax.PatternContext.NodeSpanApply[(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15), Pattern[U]]): on[U] = new on[U](app((t1, t2, t3, t4, t5, t6, t7, t8, t9, t10, t11, t12, t13, t14, t15)))
+    inline def apply[T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, U](t1: C ?=> T1, t2: C ?=> T2, t3: C ?=> T3, t4: C ?=> T4, t5: C ?=> T5, t6: C ?=> T6, t7: C ?=> T7, t8: C ?=> T8, t9: C ?=> T9, t10: C ?=> T10, t11: C ?=> T11, t12: C ?=> T12, t13: C ?=> T13, t14: C ?=> T14, t15: C ?=> T15, t16: C ?=> T16)(using app: syntax.PatternContext.NodeSpanApply[(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16), Pattern[U]]): on[U] = new on[U](app((t1, t2, t3, t4, t5, t6, t7, t8, t9, t10, t11, t12, t13, t14, t15, t16)))
+    inline def apply[T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, U](t1: C ?=> T1, t2: C ?=> T2, t3: C ?=> T3, t4: C ?=> T4, t5: C ?=> T5, t6: C ?=> T6, t7: C ?=> T7, t8: C ?=> T8, t9: C ?=> T9, t10: C ?=> T10, t11: C ?=> T11, t12: C ?=> T12, t13: C ?=> T13, t14: C ?=> T14, t15: C ?=> T15, t16: C ?=> T16, t17: C ?=> T17)(using app: syntax.PatternContext.NodeSpanApply[(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17), Pattern[U]]): on[U] = new on[U](app((t1, t2, t3, t4, t5, t6, t7, t8, t9, t10, t11, t12, t13, t14, t15, t16, t17)))
+    inline def apply[T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18, U](t1: C ?=> T1, t2: C ?=> T2, t3: C ?=> T3, t4: C ?=> T4, t5: C ?=> T5, t6: C ?=> T6, t7: C ?=> T7, t8: C ?=> T8, t9: C ?=> T9, t10: C ?=> T10, t11: C ?=> T11, t12: C ?=> T12, t13: C ?=> T13, t14: C ?=> T14, t15: C ?=> T15, t16: C ?=> T16, t17: C ?=> T17, t18: C ?=> T18)(using app: syntax.PatternContext.NodeSpanApply[(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18), Pattern[U]]): on[U] = new on[U](app((t1, t2, t3, t4, t5, t6, t7, t8, t9, t10, t11, t12, t13, t14, t15, t16, t17, t18)))
+    inline def apply[T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19, U](t1: C ?=> T1, t2: C ?=> T2, t3: C ?=> T3, t4: C ?=> T4, t5: C ?=> T5, t6: C ?=> T6, t7: C ?=> T7, t8: C ?=> T8, t9: C ?=> T9, t10: C ?=> T10, t11: C ?=> T11, t12: C ?=> T12, t13: C ?=> T13, t14: C ?=> T14, t15: C ?=> T15, t16: C ?=> T16, t17: C ?=> T17, t18: C ?=> T18, t19: C ?=> T19)(using app: syntax.PatternContext.NodeSpanApply[(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19), Pattern[U]]): on[U] = new on[U](app((t1, t2, t3, t4, t5, t6, t7, t8, t9, t10, t11, t12, t13, t14, t15, t16, t17, t18, t19)))
+    inline def apply[T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19, T20, U](t1: C ?=> T1, t2: C ?=> T2, t3: C ?=> T3, t4: C ?=> T4, t5: C ?=> T5, t6: C ?=> T6, t7: C ?=> T7, t8: C ?=> T8, t9: C ?=> T9, t10: C ?=> T10, t11: C ?=> T11, t12: C ?=> T12, t13: C ?=> T13, t14: C ?=> T14, t15: C ?=> T15, t16: C ?=> T16, t17: C ?=> T17, t18: C ?=> T18, t19: C ?=> T19, t20: C ?=> T20)(using app: syntax.PatternContext.NodeSpanApply[(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19, T20), Pattern[U]]): on[U] = new on[U](app((t1, t2, t3, t4, t5, t6, t7, t8, t9, t10, t11, t12, t13, t14, t15, t16, t17, t18, t19, t20)))
+    inline def apply[T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19, T20, T21, U](t1: C ?=> T1, t2: C ?=> T2, t3: C ?=> T3, t4: C ?=> T4, t5: C ?=> T5, t6: C ?=> T6, t7: C ?=> T7, t8: C ?=> T8, t9: C ?=> T9, t10: C ?=> T10, t11: C ?=> T11, t12: C ?=> T12, t13: C ?=> T13, t14: C ?=> T14, t15: C ?=> T15, t16: C ?=> T16, t17: C ?=> T17, t18: C ?=> T18, t19: C ?=> T19, t20: C ?=> T20, t21: C ?=> T21)(using app: syntax.PatternContext.NodeSpanApply[(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19, T20, T21), Pattern[U]]): on[U] = new on[U](app((t1, t2, t3, t4, t5, t6, t7, t8, t9, t10, t11, t12, t13, t14, t15, t16, t17, t18, t19, t20, t21)))
+    inline def apply[T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19, T20, T21, T22, U](t1: C ?=> T1, t2: C ?=> T2, t3: C ?=> T3, t4: C ?=> T4, t5: C ?=> T5, t6: C ?=> T6, t7: C ?=> T7, t8: C ?=> T8, t9: C ?=> T9, t10: C ?=> T10, t11: C ?=> T11, t12: C ?=> T12, t13: C ?=> T13, t14: C ?=> T14, t15: C ?=> T15, t16: C ?=> T16, t17: C ?=> T17, t18: C ?=> T18, t19: C ?=> T19, t20: C ?=> T20, t21: C ?=> T21, t22: C ?=> T22)(using app: syntax.PatternContext.NodeSpanApply[(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19, T20, T21, T22), Pattern[U]]): on[U] = new on[U](app((t1, t2, t3, t4, t5, t6, t7, t8, t9, t10, t11, t12, t13, t14, t15, t16, t17, t18, t19, t20, t21, t22)))
     // format: on
   end on
 
   final class rewrite[T](
       srcPattern: Pattern[T],
-      fn: syntax.ValueContext.type ?=> T => Node | Iterable[Node] | syntax.unchanged.type,
+      fn: syntax.ValueContext.type ?=> T => Node | Iterable[Node] |
+        syntax.unchanged.type,
   ) extends ReflectiveEnumeration.Enumerable:
     val pattern = srcPattern.rewrite(fn)
   end rewrite
@@ -165,7 +183,8 @@ object Query:
           scanPattern(buf, pattern.pattern)
         case pattern: Pattern.tokenExact[?] =>
           Chain.one(Right(buf.ensureBranch.upsert(pattern.token)))
-        case _: (Pattern.tokenAny[?] | Pattern.rep[?] | Pattern.rewriteMap[?, ?]) =>
+        case _: (Pattern.tokenAny[?] | Pattern.rep[?] |
+              Pattern.rewriteMap[?, ?]) =>
           Chain.one(Left(buf))
         case _: Pattern.embed[?] =>
           Chain.one(Left(buf))
