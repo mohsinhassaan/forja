@@ -39,15 +39,14 @@ object CalcReader extends Pass.MultiPass:
               rng.tail.dropWhile(numberBytes),
             )
           else NodeSpan(rng.head, rng.tail),
-    ).rewrite: _ =>
-      unchanged
+    ).rewriteInPattern
     end popByte
 
     def skipWhitespace = on(
       !Input.ParseHead(),
       cc.lit(' '.toByte, '\n'.toByte, '\t'.toByte),
     ).rewrite: hd =>
-      hd._1
+      hd
     end skipWhitespace
 
     def openGroup = on(

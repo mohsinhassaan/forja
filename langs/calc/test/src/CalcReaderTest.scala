@@ -4,10 +4,11 @@ import utest.*
 import forja.Node
 import forja.SourceRange
 import forja.syntax.*
+import forja.TestUtil.assertEqualDiff
 
 class CalcReaderTest extends TestSuite:
   def parseString(using path: framework.TestPath)(): Node =
-    CalcReader(
+    CalcReader.perform(
       CalcReader.Input.Root(
         CalcReader.Input.ParseHead(),
         SourceRange(path.value.last),
@@ -17,82 +18,87 @@ class CalcReaderTest extends TestSuite:
 
   val tests = Tests:
     test("popByte") {
-      CalcReader.readTokens.popByte.pattern
-        .runPattern:
+      assertEqualDiff(
+        CalcReader.readTokens.popByte.pattern
+          .runPattern:
+            CalcReader.Input
+              .Root(
+                CalcReader.Input.ParseHead(),
+                SourceRange("42"),
+              )
+              .children
+              .asEmptyNodeSpan
+        ,
+        Some(
+          (),
           CalcReader.Input
             .Root(
               CalcReader.Input.ParseHead(),
-              SourceRange("42"),
+              '4'.toByte,
+              '2'.toByte,
+              SourceRange(""),
             )
             .children
             .asEmptyNodeSpan
-      ==> Some(
-        (),
-        CalcReader.Input
-          .Root(
-            CalcReader.Input.ParseHead(),
-            '4'.toByte,
-            '2'.toByte,
-            SourceRange(""),
-          )
-          .children
-          .asEmptyNodeSpan
-          .expandRightMax,
+            .expandRightMax,
+        ),
       )
     }
 
     test("2 + 2") {
-      parseString() ==> CalcReader.Tokenized.Root(
-        CalcReader.Tokenized.Number(2),
-        CalcReader.Tokenized.Add(),
-        CalcReader.Tokenized.Number(2),
+      assertEqualDiff(
+        parseString(),
+        CalcReader.Tokenized.Root(
+          CalcReader.Tokenized.Number(2),
+          CalcReader.Tokenized.Add(),
+          CalcReader.Tokenized.Number(2),
+        ),
       )
     }
     test("256 +2 - 999* /0") {
-      parseString() ==> CalcReader.Tokenized.Root(
-        CalcReader.Tokenized.Number(256),
-        CalcReader.Tokenized.Add(),
-        CalcReader.Tokenized.Number(2),
-        CalcReader.Tokenized.Sub(),
-        CalcReader.Tokenized.Number(999),
-        CalcReader.Tokenized.Mul(),
-        CalcReader.Tokenized.Div(),
-        CalcReader.Tokenized.Number(0),
+      assertEqualDiff(
+        parseString(),
+        CalcReader.Tokenized.Root(
+          CalcReader.Tokenized.Number(256),
+          CalcReader.Tokenized.Add(),
+          CalcReader.Tokenized.Number(2),
+          CalcReader.Tokenized.Sub(),
+          CalcReader.Tokenized.Number(999),
+          CalcReader.Tokenized.Mul(),
+          CalcReader.Tokenized.Div(),
+          CalcReader.Tokenized.Number(0),
+        ),
       )
     }
     test("") {
-      parseString() ==> CalcReader.Tokenized.Root()
+      assertEqualDiff(parseString(), CalcReader.Tokenized.Root())
     }
     test("    \n\t") {
-      parseString() ==> CalcReader.Tokenized.Root()
+      assertEqualDiff(parseString(), CalcReader.Tokenized.Root())
     }
     // TODO: invalid char k
     test("5") {
-      parseString() ==> CalcReader.Tokenized.Root(
-        CalcReader.Tokenized.Number(5),
+      assertEqualDiff(
+        parseString(),
+        CalcReader.Tokenized.Root(
+          CalcReader.Tokenized.Number(5),
+        ),
       )
     }
     test("5 + 11") {
-      parseString() ==> CalcReader.Tokenized.Root(
-        CalcReader.Tokenized.Number(5),
-        CalcReader.Tokenized.Add(),
-        CalcReader.Tokenized.Number(11),
+      assertEqualDiff(
+        parseString(),
+        CalcReader.Tokenized.Root(
+          CalcReader.Tokenized.Number(5),
+          CalcReader.Tokenized.Add(),
+          CalcReader.Tokenized.Number(11),
+        ),
       )
     }
     test("(2 + 3) * 4") {
-      parseString() ==> CalcReader.Tokenized.Root(
-        CalcReader.Tokenized.Group(
-          CalcReader.Tokenized.Number(2),
-          CalcReader.Tokenized.Add(),
-          CalcReader.Tokenized.Number(3),
-        ),
-        CalcReader.Tokenized.Mul(),
-        CalcReader.Tokenized.Number(4),
-      )
-    }
-    test("((2 + 3) * 4)") {
-      parseString() ==> CalcReader.Tokenized.Root(
-        CalcReader.Tokenized.Group(
+      assertEqualDiff(
+        parseString(),
+        CalcReader.Tokenized.Root(
           CalcReader.Tokenized.Group(
             CalcReader.Tokenized.Number(2),
             CalcReader.Tokenized.Add(),
@@ -100,6 +106,22 @@ class CalcReaderTest extends TestSuite:
           ),
           CalcReader.Tokenized.Mul(),
           CalcReader.Tokenized.Number(4),
+        ),
+      )
+    }
+    test("((2 + 3) * 4)") {
+      assertEqualDiff(
+        parseString(),
+        CalcReader.Tokenized.Root(
+          CalcReader.Tokenized.Group(
+            CalcReader.Tokenized.Group(
+              CalcReader.Tokenized.Number(2),
+              CalcReader.Tokenized.Add(),
+              CalcReader.Tokenized.Number(3),
+            ),
+            CalcReader.Tokenized.Mul(),
+            CalcReader.Tokenized.Number(4),
+          ),
         ),
       )
     }

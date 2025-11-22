@@ -1,5 +1,8 @@
 package forja
 
+import java.io.{ByteArrayOutputStream, OutputStream}
+import java.nio.charset.StandardCharsets
+
 import forja.util.{FastPatchTree, MonomorphicIndexedSeq}
 
 import scala.annotation.publicInBinary
@@ -12,7 +15,7 @@ import Node.*
 final class Node @publicInBinary private[forja] (
     private[forja] val impl: Node.NodeImpl,
     private val nodeParentInfo: NodeParentInfo,
-):
+) extends geny.Writable:
   /* Regular nodeParentInfo may not refer to a parent that refers back to impl.
    * If we want a parent ref that is up to date, this will lazily populate such
    * a thing.
@@ -63,7 +66,12 @@ final class Node @publicInBinary private[forja] (
     impl match
       case _: (NodeImpl.TokenNode | NodeImpl.ErrorNode) => None
       case NodeImpl.EmbedNode(value)                    =>
-        embed.extractOption(value)
+        import embed.typeTest
+        value match
+          case value: T => Some(value)
+          case _        => None
+        end match
+    end match
   end valueOption
 
   def valueOptionRaw: Option[Any] =
@@ -161,17 +169,87 @@ final class Node @publicInBinary private[forja] (
   end hashCode
 
   override def toString(): String =
-    impl match
-      case NodeImpl.TokenNode(token, _, _) =>
-        s"$token(${(this.children.view.map(_.toString()) ++ this.attrs.view.map(
-            (k, v) => s"$k -> $v",
-          )).mkString(", ")})"
-      case NodeImpl.EmbedNode(value) =>
-        val embed = Node.Embed.embedByValue(value)
-        s"${value.getClass().getName()}($value)"
-      case NodeImpl.ErrorNode(msg, nodes*) =>
-        s"#error(\"$msg\", ${nodes.mkString(", ")})"
+    val out = ByteArrayOutputStream()
+    writeBytesTo(out)
+    out.toString(StandardCharsets.UTF_8)
+    // impl match
+    //   case NodeImpl.TokenNode(token, _, _) =>
+    //     s"$token(${(this.children.view.map(_.toString()) ++ this.attrs.view.map(
+    //         (k, v) => s"$k -> $v",
+    //       )).mkString(", ")})"
+    //   case NodeImpl.EmbedNode(value) =>
+    //     val embed = Node.Embed.embedByValue(value)
+    //     s"${value.getClass().getName()}($value)"
+    //   case NodeImpl.ErrorNode(msg, nodes*) =>
+    //     s"#error(\"$msg\", ${nodes.mkString(", ")})"
   end toString
+
+  def writeBytesTo(out_ : OutputStream): Unit =
+
+    object out extends OutputStream:
+      private var indent = 0
+      def write(b: Int): Unit =
+        b match
+          case '\n' =>
+            out_.write('\n')
+            (0 until indent).foreach(_ => out_.write(' '))
+          case b =>
+            out_.write(b)
+      end write
+
+      def indentedBy[T](amt: Int = 2)(fn: => T): T =
+        try
+          indent += amt
+          fn
+        finally indent -= amt
+      end indentedBy
+    end out
+
+    var isFirstLine = true
+    def nl(): Unit =
+      if isFirstLine
+      then isFirstLine = false
+      else out.write('\n')
+    end nl
+
+    def writeImpl(impl: NodeImpl): Unit =
+      nl()
+      impl match
+        case NodeImpl.TokenNode(token, children, attrs) =>
+          out.write('>')
+          out.write(token.fullName.getBytes(StandardCharsets.UTF_8))
+          out.indentedBy():
+            children.foreach: impl =>
+              writeImpl(impl)
+            attrs.keys.toArray
+              .sortBy(_.fullName)
+              .foreach: k =>
+                nl()
+                out.write('?')
+                out.write(k.fullName.getBytes(StandardCharsets.UTF_8))
+                out.indentedBy():
+                  writeImpl(attrs(k))
+        case NodeImpl.EmbedNode(value) =>
+          val embed = Embed.embedByValue(value)
+
+          out.write('~')
+          out.write(embed.getClass().getName().getBytes(StandardCharsets.UTF_8))
+          out.indentedBy():
+            nl()
+            embed.writeBytesTo(value, out)
+        case NodeImpl.ErrorNode(msg, nodes*) =>
+          out.indentedBy():
+            msg.linesWithSeparators
+              .foreach: line =>
+                out.write('!')
+                out.write(line.getBytes(StandardCharsets.UTF_8))
+            nodes.foreach: impl =>
+              writeImpl(impl.impl)
+      end match
+    end writeImpl
+
+    writeImpl(impl)
+  end writeBytesTo
 end Node
 
 export Node.NodeSpan
@@ -223,9 +301,22 @@ object Node:
   inline def apply[T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19, T20, T21, T22, U](t1: T1, t2: T2, t3: T3, t4: T4, t5: T5, t6: T6, t7: T7, t8: T8, t9: T9, t10: T10, t11: T11, t12: T12, t13: T13, t14: T14, t15: T15, t16: T16, t17: T17, t18: T18, t19: T19, t20: T20, t21: T21, t22: T22)(using ctx: syntax.Context)(using app: ctx.NodeApply[(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19, T20, T21, T22), U]): U = app((t1, t2, t3, t4, t5, t6, t7, t8, t9, t10, t11, t12, t13, t14, t15, t16, t17, t18, t19, t20, t21, t22))
   // format: on
 
-  trait Embed[T]:
-    def extractOption(value: Matchable): Option[T]
+  trait Embed[T](using val typeTest: TypeTest[Matchable, T]):
+    self: Singleton =>
+    locally:
+      val modField = getClass().getField("MODULE$")
+      require(
+        modField ne null,
+        s"${getClass().getName()} must have a static MODULE$$ field, or it will not be deserializable",
+      )
+      require(
+        modField.get(null) eq self,
+        s"${getClass().getName()}'s static MODULE$$ field must refer to itself",
+      )
+    // Compiler crash?
+    // given typeTest: TypeTest[Matchable, T] = deferred
     def prettyString(value: T): String
+    def writeBytesTo(value: T, out: OutputStream): Unit
   end Embed
 
   object Embed:
@@ -234,19 +325,23 @@ object Node:
       embedByClass(value.getClass()).asInstanceOf[Node.Embed[T]]
     end embedByValue
 
-    type Primitive =
-      Boolean | Byte | Int | Long | Float | Double | Char
-
-    given embedPrimitive: [T <: Primitive] => TypeTest[Any, T] => Embed[T]:
-      def extractOption(value: Matchable): Option[T] =
-        value match
-          case value: T => Some(value)
-          case _        => None
-      end extractOption
+    trait EmbedPrimitive[T] extends Embed[T]:
+      self: Singleton =>
       def prettyString(value: T): String =
         s"${value.getClass()}($value)"
       end prettyString
-    end embedPrimitive
+      def writeBytesTo(value: T, out: OutputStream): Unit =
+        out.write(value.toString().getBytes(StandardCharsets.UTF_8))
+      end writeBytesTo
+    end EmbedPrimitive
+
+    given embedBoolean: EmbedPrimitive[Boolean] {}
+    given embedByte: EmbedPrimitive[Byte] {}
+    given embedInt: EmbedPrimitive[Int] {}
+    given embedLong: EmbedPrimitive[Long] {}
+    given embedFloat: EmbedPrimitive[Float] {}
+    given embedDouble: EmbedPrimitive[Double] {}
+    given embedChar: EmbedPrimitive[Char] {}
   end Embed
 
   sealed trait Attrs extends Map[Token, Node]:

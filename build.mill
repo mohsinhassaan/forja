@@ -44,6 +44,7 @@ object forja extends ForjaModule:
     mvn"com.lihaoyi::sourcecode:0.4.4",
     mvn"com.lihaoyi::os-lib:0.11.5",
     mvn"org.typelevel::cats-core:2.13.0",
+    mvn"io.github.java-diff-utils:java-diff-utils:4.15",
   )
   object test extends ForjaTests
 
@@ -79,6 +80,7 @@ object forja extends ForjaModule:
                   )
                   .replace(s"T${i - 1})", s"T${i - 1}, T$i)")
                   .replace(s"t${i - 1})", s"t${i - 1}, t$i)")
+                  .replace(s"T${i - 1}]", s"T${i - 1}, T$i]")
                 template
             case line @ s"$_// format: on"
                 if state.isInstanceOf[State.IsReplacing] =>

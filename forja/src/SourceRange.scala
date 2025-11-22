@@ -14,6 +14,7 @@
 
 package forja
 
+import java.io.OutputStream
 import java.nio.ByteBuffer
 import java.nio.channels.Channels
 import java.nio.charset.{Charset, StandardCharsets}
@@ -21,7 +22,6 @@ import java.nio.charset.{Charset, StandardCharsets}
 import forja.util.MonomorphicIndexedSeq
 
 import scala.collection.mutable
-import scala.reflect.TypeTest
 
 final class SourceRange(
     val source: Source,
@@ -232,15 +232,13 @@ object SourceRange:
   def entire(source: Source): SourceRange =
     new SourceRange(source, 0, source.byteBuffer.limit())
 
-  given embed: [T <: SourceRange] => (TypeTest[Matchable, T]) => Node.Embed[T]:
-    def extractOption(value: Matchable): Option[T] =
-      value match
-        case sourceRange: T => Some(sourceRange)
-        case _              => None
-    end extractOption
-    def prettyString(value: T): String =
+  given embed: Node.Embed[SourceRange]:
+    def prettyString(value: SourceRange): String =
       value.toString()
     end prettyString
+    def writeBytesTo(value: SourceRange, out: OutputStream): Unit =
+      value.iterator.foreach(out.write(_))
+    end writeBytesTo
   end embed
 
   extension (ctx: StringContext)

@@ -7,7 +7,7 @@ import PatternTest.*
 
 class PatternTest extends TestSuite:
   extension (node: Node)
-    def rwChildren[T](rw: Query.rewrite[T]): Node =
+    def rwChildren[T <: Matchable](rw: Query.rewrite[T]): Node =
       rw.pattern
         .runPattern(node.children.asEmptyNodeSpan)
         .map(_._2)
@@ -88,7 +88,7 @@ class PatternTest extends TestSuite:
         .rwChildren:
           on(
             cc.lit(42).rewrite(_ => cc.lit(43)),
-          ).rewrite(_ => unchanged)
+          ).rewriteInPattern
       ==> AST.Root(43)
 
       AST
@@ -102,7 +102,7 @@ class PatternTest extends TestSuite:
             AST.T1(
               cc.lit(42).rewrite(_ => cc.lit(43)),
             ),
-          ).rewrite(_ => unchanged)
+          ).rewriteInPattern
       ==> AST.Root(AST.T1(43))
 
       AST
@@ -113,8 +113,8 @@ class PatternTest extends TestSuite:
         .rwChildren:
           on(
             AST.T1(`...`),
-            AST.T2(+cc.embed[Int]).rewrite(i => NodeSpan(i._1)),
-          ).rewrite(_ => unchanged)
+            AST.T2(+cc.embed[Int]).rewrite(i => NodeSpan(i)),
+          ).rewriteInPattern
       ==> AST.Root(AST.T1(1), 2)
     }
 
@@ -158,7 +158,7 @@ class PatternTest extends TestSuite:
             +cc.embed[Int],
             cc.lit(5),
           ).rewrite: i =>
-            NodeSpan(i._1)
+            NodeSpan(i)
       ==> AST.Root(4)
 
       AST

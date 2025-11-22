@@ -59,15 +59,19 @@ object Query:
       Eval.now(pattern.runPattern(node.emptyNodeSpanHere).map(_._1))
     end runQueryImpl
 
-    def rewrite[U >: T](
-        fn: syntax.ValueContext.type ?=> U => Node | Iterable[Node] |
-          syntax.unchanged.type,
+    def rewrite[U >: T <: Matchable](
+        fn: syntax.ValueContext.type ?=> Pattern.RWType[U] => on.ResultType,
     ): rewrite[U] =
       new rewrite(pattern, fn)
     end rewrite
+
+    def rewriteInPattern[U >: T <: Matchable]: rewrite[U] =
+      rewrite: _ =>
+        syntax.unchanged
   end on
 
   object on:
+    type ResultType = Node | Iterable[Node] | syntax.unchanged.type
     private type C = syntax.PatternContext.type
     private given C = syntax.PatternContext
 
@@ -104,10 +108,10 @@ object Query:
     // format: on
   end on
 
-  final class rewrite[T](
+  final class rewrite[T <: Matchable](
       srcPattern: Pattern[T],
-      fn: syntax.ValueContext.type ?=> T => Node | Iterable[Node] |
-        syntax.unchanged.type,
+      fn: syntax.ValueContext.type ?=> Pattern.RWType[T] => Node |
+        Iterable[Node] | syntax.unchanged.type,
   ) extends ReflectiveEnumeration.Enumerable:
     val pattern = srcPattern.rewrite(fn)
   end rewrite

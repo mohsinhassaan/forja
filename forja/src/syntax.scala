@@ -227,11 +227,9 @@ object syntax:
 
   object WfContext extends Context:
     def embed[T <: Matchable: Node.Embed]: Wf.EmbedWf[T] =
-      ???
-    end embed
+      Wf.EmbedWf[T]
 
-    def rep[T](elem: Wf.Shapes): Wf.RepeatedShapeSeq =
-      ??? // new Wf.RepeatedShapeSeq(Seq(elem))
-    end rep
+    def rep[T](elem: Wf.Shape): Wf.RepeatedShape =
+      new Wf.RepeatedShape(elem)
   end WfContext
 end syntax

@@ -1,19 +1,21 @@
 package forja
 
+import forja.Wf.TokenWf
 import forja.util.ReflectiveEnumeration
 
 import scala.annotation.tailrec
+import scala.concurrent.ExecutionContext
 
 import Pass.*
 
 trait Pass extends ReflectiveEnumeration.Enumerable:
-  final def apply(root: Node): Node =
+  final def perform(root: Node): Node =
     if root.containsError
     then root
-    else applyImpl(root)
-  end apply
+    else performImpl(root)
+  end perform
 
-  protected def applyImpl(root: Node): Node
+  protected def performImpl(root: Node): Node
 end Pass
 
 object Pass:
@@ -24,7 +26,7 @@ object Pass:
         .reduce(_ | _)
     end rewritesAgg
 
-    final protected def applyImpl(node: Node): Node =
+    final protected def performImpl(node: Node): Node =
       @tailrec
       def impl(
           nodeSpan: NodeSpan,
@@ -71,17 +73,53 @@ object Pass:
           .getOrElse(nodeSpan.expandRightOption(1).get.head)
       // Put our parents back
       node.replaceThis(replacementNode)
-    end applyImpl
+    end performImpl
+
+    trait ModelChecker extends forja.ModelChecker:
+      def inputWf: TokenWf
+      def outputWf: TokenWf
+
+      type State = Node
+
+      extension (state: Node)
+        final def isErrorState: Boolean =
+          !state.containsError
+            && outputWf.validate
+              .perform(state)
+              .containsError
+        end isErrorState
+      end extension
+
+      def initStates(using ExecutionContext): Iterator[Node] =
+        // map from token to combination set
+        // --> rebuild map from nodes at all prev lvls
+        // there isn't actually much recursion, just a data driven recurrence
+        inputWf
+        // ideas:
+        // - limit width using custom rules, default behavior is to iterate "level"s
+        // - limit number of init states using takeWhile type logic
+
+        // custom rules could be found using ReflectiveEnumeration?
+        ???
+      end initStates
+
+      def nextStates(state: Node)(using ExecutionContext): Iterator[Node] =
+        // ideas:
+        // - detect infinite loops (recurrent rule applications that return to the same state)
+        // - rewrite rules applied in every position at once, find all interpretations
+        ???
+      end nextStates
+    end ModelChecker
   end RewritePass
 
   trait MultiPass extends Pass, ReflectiveEnumeration:
     private lazy val passes = valuesByType[Pass]
-    final protected def applyImpl(root: Node): Node =
+    final protected def performImpl(root: Node): Node =
       var node = root
       passes.foreach: pass =>
         if !node.containsError
-        then node = pass(node)
+        then node = pass.perform(node)
       node
-    end applyImpl
+    end performImpl
   end MultiPass
 end Pass

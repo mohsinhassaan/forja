@@ -26,21 +26,24 @@ sealed abstract class Pattern[+T]:
 
   final def map[U](fn: T => U): Pattern[U] = new map(pattern, fn)
 
-  final def rewrite(
-      fn: syntax.ValueContext.type ?=> T => Node | Iterable[Node] |
-        syntax.unchanged.type,
+  final def rewrite[T2 >: T <: Matchable](
+      fn: syntax.ValueContext.type ?=> Pattern.RWType[T2] => Node |
+        Iterable[Node] | syntax.unchanged.type,
   ): Pattern[Unit] =
-    rewriteMap: t =>
+    rewriteMap[T2, Unit]: t =>
       ((), fn(t))
   end rewrite
 
-  final def rewriteMap[U](
-      fn: syntax.ValueContext.type ?=> T => (
+  final def rewriteMap[T2 >: T <: Matchable, U](
+      fn: syntax.ValueContext.type ?=> Pattern.RWType[T2] => (
           U,
           Node | Iterable[Node] | syntax.unchanged.type,
       ),
   ): Pattern[U] =
-    new rewriteMap(pattern, fn(using syntax.ValueContext))
+    new rewriteMap(
+      pattern.map(t => RWType.adjust(t: T2)),
+      fn(using syntax.ValueContext),
+    )
   end rewriteMap
 
   final def filter(pred: T => Boolean): Pattern[T] = new filter(pattern, pred)
@@ -52,6 +55,21 @@ sealed abstract class Pattern[+T]:
 end Pattern
 
 object Pattern:
+  type RWType[T <: Matchable] = T match
+    case EmptyTuple => Unit
+    case Tuple1[t]  => t
+    case Any        => T
+  end RWType
+
+  object RWType:
+    def adjust[T <: Matchable](arg: T): RWType[T] =
+      arg match
+        case arg: EmptyTuple => ()
+        case arg: Tuple1[t1] => arg._1
+        case _: Any          => arg
+    end adjust
+  end RWType
+
   final class Include[+T](val pattern: Pattern[T])
 
   private[forja] final class filter[T](
