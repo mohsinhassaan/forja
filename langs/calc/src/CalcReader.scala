@@ -44,7 +44,7 @@ object CalcReader extends Pass.MultiPass:
 
     def skipWhitespace = on(
       !Input.ParseHead(),
-      cc.lit(' '.toByte, '\n'.toByte, '\t'.toByte),
+      cc.lit(' '.toByte, '\n'.toByte, '\t'.toByte, '\r'.toByte),
     ).rewrite: hd =>
       hd
     end skipWhitespace

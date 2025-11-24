@@ -5,6 +5,8 @@ import forja.Node
 import forja.SourceRange
 import forja.syntax.*
 import forja.TestUtil.assertEqualDiff
+import forja.langs.calc.CalcReaderTest.readTokensModelChecker
+import forja.Pass
 
 class CalcReaderTest extends TestSuite:
   def parseString(using path: framework.TestPath)(): Node =
@@ -125,5 +127,34 @@ class CalcReaderTest extends TestSuite:
         ),
       )
     }
+
+    test("ModelChecker") {
+      readTokensModelChecker.assertCheck()
+    }
   end tests
+end CalcReaderTest
+
+object CalcReaderTest:
+  object readTokensModelChecker extends CalcReader.readTokens.ModelChecker:
+    def initTreeLevels: Int = 1
+    def initRepMax: Int = 3
+    def inputWf: TokenWf = CalcReader.Input.Root
+    def outputWf: TokenWf = CalcReader.Tokenized.Root
+
+    object genSourceRange extends Pass.RewritePass.EmbedGenerator[SourceRange]:
+      val byteBag = IArray[Byte](
+        '\n', ' ', '\r', '\t', '+', '-', '*', '/',
+      ) ++ ('0' to '9').map(_.toByte)
+      def generate: Iterator[SourceRange] =
+        Iterator
+          .iterate(List(IArray.empty[Byte])): prefixes =>
+            prefixes.flatMap: prefix =>
+              byteBag.iterator
+                .map(_ +: prefix)
+          .takeWhile(_.head.length <= 4)
+          .flatten
+          .map(SourceRange(_))
+      end generate
+    end genSourceRange
+  end readTokensModelChecker
 end CalcReaderTest

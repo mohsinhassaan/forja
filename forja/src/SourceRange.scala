@@ -224,6 +224,10 @@ object SourceRange:
   def apply(str: String): SourceRange =
     entire(Source.fromString(str))
 
+  def apply(bytes: IArray[Byte]): SourceRange =
+    entire(Source.fromIArray(bytes))
+  end apply
+
   def apply(source: Source, offset: Int, length: Int): SourceRange =
     new SourceRange(source, offset, length)
 

@@ -32,7 +32,7 @@ object Wf:
       new TokenWf(token, ShapeSeq(shapes*))
     end replace
 
-    private lazy val stableShapeSeq = shapeSeq
+    private[forja] lazy val stableShapeSeq = shapeSeq
 
     object validate extends Pass:
       protected def performImpl(root: Node): Node =

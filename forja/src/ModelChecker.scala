@@ -5,27 +5,40 @@ import scala.concurrent.ExecutionContext
 
 transparent trait ModelChecker:
   type State
+  type ErrorState
 
-  extension (state: State) def isErrorState: Boolean
-  end extension
+  extension (state: State) def checkErrorState: Option[ErrorState]
 
   def initStates(using ExecutionContext): Iterator[State]
   def nextStates(state: State)(using ExecutionContext): Iterator[State]
 
+  def assertCheck(): Unit =
+    check() match
+      case None                     => // ok
+      case Some((errorState, path)) =>
+        path.foreach: state =>
+          println(state.toString())
+          println("---")
+        println(errorState)
+    end match
+  end assertCheck
+
   def check()(using
       ctx: ExecutionContext = ExecutionContext.global,
-  ): Option[Seq[State]] =
+  ): Option[(ErrorState, Seq[State])] =
     val stateQueue = mutable.Queue.from(initStates)
     val knownStates = mutable.HashMap.from[State, Option[State]](
       stateQueue.iterator.map(_ -> None),
     )
 
-    var result: Option[Seq[State]] = None
+    var result: Option[(ErrorState, Seq[State])] = None
 
     while stateQueue.nonEmpty && result.isEmpty
     do
       val state = stateQueue.synchronized(stateQueue.dequeue)
+      var hasNextStates = false
       nextStates(state).foreach: nextState =>
+        hasNextStates = true
         knownStates.getOrElseUpdate(
           nextState, {
             stateQueue.enqueue(nextState)
@@ -33,14 +46,24 @@ transparent trait ModelChecker:
           },
         )
 
-        if nextState.isErrorState
-        then
-          result = Some:
-            Seq.from:
-              Iterator.unfold(Some(nextState): Option[State]): nextStateOpt =>
-                nextStateOpt.map: nextState =>
-                  (nextState, knownStates(nextState))
-        end if
+      if !hasNextStates
+      then
+        state.checkErrorState match
+          case None             =>
+          case Some(errorState) =>
+            val path =
+              Iterator
+                .iterate(Some(state): Option[State]): stateOpt =>
+                  stateOpt
+                    .flatMap(knownStates.get)
+                    .flatten
+                .takeWhile(_.nonEmpty)
+                .flatten
+                .toSeq
+                .reverse
+            result = Some((errorState, path))
+        end match
+      end if
     end while
 
     result

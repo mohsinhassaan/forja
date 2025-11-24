@@ -75,6 +75,10 @@ object Source:
     ByteBufferSource(None, byteBuffer)
   end fromByteBuffer
 
+  def fromIArray(bytes: IArray[Byte]): Source =
+    ByteBufferSource(None, ByteBuffer.wrap(bytes.unsafeArray))
+  end fromIArray
+
   def fromWritable(writable: geny.Writable): Source =
     val out = java.io.ByteArrayOutputStream()
     writable.writeBytesTo(out)

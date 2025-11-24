@@ -14,11 +14,11 @@ transparent trait ReflectiveEnumeration:
 
   def valuesByType[T <: Enumerable: ClassTag](using
       TypeTest[Enumerable, T],
-  ): IArray[T] =
+  ): IArray[(String, T)] =
     fieldList
       .fieldValues(this)
       .collect:
-        case value: T => value
+        case (fieldName, value: T) => (fieldName, value)
   end valuesByType
 end ReflectiveEnumeration
 
@@ -26,7 +26,7 @@ object ReflectiveEnumeration:
   trait Enumerable
 
   trait FieldList[R <: ReflectiveEnumeration]:
-    def fieldValues(r: R): IArray[Enumerable]
+    def fieldValues(r: R): IArray[(String, Enumerable)]
   end FieldList
 
   inline given inferredFieldList: [R <: ReflectiveEnumeration] => FieldList[R] =
@@ -38,7 +38,7 @@ object ReflectiveEnumeration:
     import quotes.reflect.*
     '{
       new FieldList[R]:
-        def fieldValues(r: R): IArray[Enumerable] =
+        def fieldValues(r: R): IArray[(String, Enumerable)] =
           ${
             val tp = TypeRepr.of[R]
             if !tp.isSingleton
@@ -60,7 +60,12 @@ object ReflectiveEnumeration:
                     .getOrElse(("", 0, 0))
 
             val exprs = syms.map: sym =>
-              'r.asTerm.select(sym).asExprOf[Enumerable]
+              '{
+                (
+                  ${ Expr(sym.name) },
+                  ${ 'r.asTerm.select(sym).asExprOf[Enumerable] },
+                )
+              }
             '{ IArray(${ Varargs(exprs) }*) }
           }
         end fieldValues

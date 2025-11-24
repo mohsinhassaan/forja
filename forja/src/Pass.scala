@@ -4,6 +4,8 @@ import forja.Wf.TokenWf
 import forja.util.ReflectiveEnumeration
 
 import scala.annotation.tailrec
+import scala.collection.mutable
+import scala.compiletime.{asMatchable, deferred}
 import scala.concurrent.ExecutionContext
 
 import Pass.*
@@ -20,9 +22,10 @@ end Pass
 
 object Pass:
   trait RewritePass extends Pass, ReflectiveEnumeration:
-    private lazy val rewritesAgg: Pattern[Unit] =
+    private lazy val rewritesAgg: Pattern[String] =
       valuesByType[Query.rewrite[?]].view
-        .map(_.pattern)
+        .map: (fieldName, rw) =>
+          rw.pattern.map(_ => fieldName)
         .reduce(_ | _)
     end rewritesAgg
 
@@ -62,7 +65,7 @@ object Pass:
               then impl(nextSpan, madeChangesThisIteration = false)
               else nextSpan
             else impl(nextSpan, madeChangesThisIteration)
-          case Some(((), nodeSpan)) =>
+          case Some((_, nodeSpan)) =>
             impl(nodeSpan.take(0), madeChangesThisIteration = true)
       end impl
 
@@ -75,45 +78,181 @@ object Pass:
       node.replaceThis(replacementNode)
     end performImpl
 
-    trait ModelChecker extends forja.ModelChecker:
+    trait ModelChecker extends forja.ModelChecker, ReflectiveEnumeration:
+      import RewritePass.MCState
       def inputWf: TokenWf
       def outputWf: TokenWf
 
-      type State = Node
+      type State = MCState
+      type ErrorState = Node
 
-      extension (state: Node)
-        final def isErrorState: Boolean =
-          !state.containsError
-            && outputWf.validate
-              .perform(state)
-              .containsError
-        end isErrorState
+      extension (state: MCState)
+        final def checkErrorState: Option[ErrorState] =
+          if !state.node.containsError
+          then
+            val errorState = outputWf.validate
+              .perform(state.node)
+            if errorState.containsError
+            then Some(errorState)
+            else None
+          else None
+        end checkErrorState
       end extension
 
-      def initStates(using ExecutionContext): Iterator[Node] =
-        // map from token to combination set
-        // --> rebuild map from nodes at all prev lvls
-        // there isn't actually much recursion, just a data driven recurrence
-        inputWf
-        // ideas:
-        // - limit width using custom rules, default behavior is to iterate "level"s
-        // - limit number of init states using takeWhile type logic
+      def initTreeLevels: Int
+      def initRepMax: Int
 
-        // custom rules could be found using ReflectiveEnumeration?
-        ???
+      private val embedGenerators: Map[Node.Embed[
+        ?,
+      ], (name: String, gen: RewritePass.EmbedGenerator[?])] =
+        valuesByType[RewritePass.EmbedGenerator[?]].iterator
+          .map: (name, gen) =>
+            gen.embed -> (name, gen)
+          .toMap
+      end embedGenerators
+
+      def initStates(using ExecutionContext): Iterator[MCState] =
+        type Ident = Token | Node.Embed[?]
+
+        type StructureMap = Map[Ident, List[Node]]
+        object StructureMap:
+          def empty: StructureMap = Map.empty
+        end StructureMap
+
+        type StructureFn = StructureMap => Iterator[Node]
+
+        def buildStructureFn(wf: TokenWf): StructureFn =
+          val visited = mutable.HashSet[Ident]()
+          val buf = mutable.ListBuffer[StructureFn]()
+          def implForWf(wf: TokenWf): Unit =
+            if !visited(wf.token)
+            then
+              visited += wf.token
+              val fns = wf.stableShapeSeq.shapes
+                .map: shape =>
+                  shape match
+                    case shape: (Wf.EmbedWf[?] | TokenWf | Wf.Choice) =>
+                      val fn = implForShape(shape)
+                      fn.andThen(_.map(List(_)))
+                    case shape: Wf.RepeatedShape =>
+                      val fn = implForShape(shape.shape)
+                      structureMap =>
+                        (0 until initRepMax).iterator
+                          .map: len =>
+                            (0 until len).foldLeft(List(Nil): List[List[Node]]):
+                              (prefixes, _) =>
+                                prefixes.flatMap: prefix =>
+                                  fn(structureMap).map(_ :: prefix)
+                          .flatten
+                    case (token: Token, _) =>
+                      ???
+                  end match
+              val fn: StructureFn = structureMap =>
+                val childLists = fns.foldLeft(List(Nil): List[List[Node]]):
+                  (prefixes, fn) =>
+                    prefixes.flatMap: prefix =>
+                      fn(structureMap).map(_ ::: prefix)
+                childLists.iterator
+                  .map: childList =>
+                    Node(wf.token, childList.reverse)
+              buf += fn
+            end if
+          end implForWf
+          def implForShape(shape: Wf.Shape): StructureFn =
+            shape match
+              case shape: Wf.EmbedWf[?] =>
+                embedGenerators.get(shape.embed) match
+                  case None =>
+                    throw AssertionError(
+                      s"need to define embed generator for ${shape.embed}",
+                    )
+                  case Some((name, gen: RewritePass.EmbedGenerator[t])) =>
+                    structureMap =>
+                      gen.generate.map(Node.embed(_)(using gen.embed))
+              case shape: Wf.TokenWf =>
+                implForWf(shape)
+                structureMap =>
+                  structureMap
+                    .getOrElse(shape.token, Nil)
+                    .iterator
+              case shape: Wf.Choice =>
+                val impls = shape.choices
+                  .map(implForShape)
+                structureMap => impls.iterator.map(_(structureMap)).flatten
+            end match
+          end implForShape
+          implForWf(wf)
+
+          structureMap =>
+            buf.iterator
+              .map(_(structureMap))
+              .flatten
+        end buildStructureFn
+
+        val structureFn = buildStructureFn(inputWf)
+
+        Iterator
+          .iterate(StructureMap.empty): structureMap =>
+            structureFn(structureMap).foldLeft(structureMap):
+              (structureMap, node) =>
+                val token = node.tokenOption.get
+                structureMap.updated(
+                  token,
+                  node :: structureMap.getOrElse(token, Nil),
+                )
+          .dropWhile(structureMap => !structureMap.contains(inputWf.token))
+          .take(initTreeLevels)
+          .reduce((l, r) => r)
+          .apply(inputWf.token)
+          .iterator
+          .map: node =>
+            MCState("<init>", node)
       end initStates
 
-      def nextStates(state: Node)(using ExecutionContext): Iterator[Node] =
-        // ideas:
-        // - detect infinite loops (recurrent rule applications that return to the same state)
-        // - rewrite rules applied in every position at once, find all interpretations
-        ???
+      def nextStates(state: MCState)(using
+          ExecutionContext,
+      ): Iterator[MCState] =
+        def impl(state: Node): Iterator[MCState] =
+          rewritesAgg
+            .runPattern(state.emptyNodeSpanHere)
+            .map: (fieldName, nodeSpan) =>
+              MCState(fieldName, nodeSpan.root)
+            .iterator
+            ++ state.children.iterator
+              .flatMap(impl)
+            ++ state.attrs.iterator
+              .map(_._2)
+              .flatMap(impl)
+        end impl
+
+        impl(state.node)
       end nextStates
     end ModelChecker
   end RewritePass
 
+  object RewritePass:
+    trait EmbedGenerator[T <: Matchable]
+        extends ReflectiveEnumeration.Enumerable:
+      given embed: Node.Embed[T] = deferred
+      def generate: Iterator[T]
+    end EmbedGenerator
+
+    final case class MCState(fieldName: String, node: Node):
+      override def toString(): String =
+        s"$fieldName\n${node.toString()}"
+      override def hashCode(): Int = node.hashCode()
+      override def equals(that: Any): Boolean =
+        that.asMatchable match
+          case that: MCState =>
+            node.equals(that.node)
+          case _ => false
+        end match
+      end equals
+    end MCState
+  end RewritePass
+
   trait MultiPass extends Pass, ReflectiveEnumeration:
-    private lazy val passes = valuesByType[Pass]
+    private lazy val passes = valuesByType[Pass].map(_._2)
     final protected def performImpl(root: Node): Node =
       var node = root
       passes.foreach: pass =>

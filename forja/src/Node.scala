@@ -5,7 +5,7 @@ import java.nio.charset.StandardCharsets
 
 import forja.util.{FastPatchTree, MonomorphicIndexedSeq}
 
-import scala.annotation.publicInBinary
+import scala.annotation.{publicInBinary, tailrec}
 import scala.collection.concurrent
 import scala.compiletime.asMatchable
 import scala.reflect.TypeTest
@@ -107,6 +107,14 @@ final class Node @publicInBinary private[forja] (
       case NodeParentInfo.AttrParent(parent, attr)   => Some(parent)
       case NodeParentInfo.Orphan                     => None
   end parentOption
+
+  @tailrec
+  def root: Node =
+    nodeParentInfoStable match
+      case NodeParentInfo.IndexParent(parent, index) => parent.root
+      case NodeParentInfo.AttrParent(parent, attr)   => parent.root
+      case NodeParentInfo.Orphan                     => this
+  end root
 
   def leftSiblingOption: Option[Node] =
     nodeParentInfoStable match
@@ -442,6 +450,7 @@ object Node:
     def expandRightOption(n: Int): Option[NodeSpan]
     def expandRightMax: NodeSpan
     def parentOption: Option[Node]
+    def root: Node
     override protected def className: String = "NodeSpan"
   end NodeSpan
 
@@ -525,6 +534,7 @@ object Node:
     end replaceThis
 
     def parentOption: Option[Node] = None
+    def root: Node = node
   end SingletonNodeSpan
 
   private final class IndexedParentNodeSpan(
@@ -588,5 +598,6 @@ object Node:
     end replaceThis
 
     def parentOption: Option[Node] = Some(parent)
+    def root: Node = parent.root
   end IndexedParentNodeSpan
 end Node
