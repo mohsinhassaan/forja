@@ -98,6 +98,20 @@ object CalcReader extends Pass.MultiPass:
     end readNumber
   end readTokens
 
+  object errorCases extends Pass.RewritePass:
+    def unmatchedClosingBrace = on(
+      !Input.ParseHead(),
+      +cc.lit(')'.toByte),
+    ).rewrite: (hd, close) =>
+      Node.error(s"unmatched closing brace")(hd, Node.embed(close))
+
+    def invalidChar = on(
+      !Input.ParseHead(),
+      +cc.embed[Byte].filter(_ != ')'),
+    ).rewrite: (hd, ch) =>
+      Node.error(s"invalid byte")(hd, Node.embed(ch))
+  end errorCases
+
   trait Tokenized extends Input, CalcAST:
     def anyTok: Shape =
       Number

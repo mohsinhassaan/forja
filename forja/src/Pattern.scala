@@ -4,6 +4,7 @@ import cats.data.Chain
 
 import scala.annotation.tailrec
 import scala.collection.mutable
+import scala.compiletime.asMatchable
 
 import Pattern.*
 
@@ -55,9 +56,9 @@ sealed abstract class Pattern[+T]:
 end Pattern
 
 object Pattern:
-  type RWType[T <: Matchable] = T match
+  type RWType[T <: Matchable] <: Matchable = T match
     case EmptyTuple => Unit
-    case Tuple1[t]  => t
+    case Tuple1[t]  => t & Matchable
     case Any        => T
   end RWType
 
@@ -65,12 +66,17 @@ object Pattern:
     def adjust[T <: Matchable](arg: T): RWType[T] =
       arg match
         case arg: EmptyTuple => ()
-        case arg: Tuple1[t1] => arg._1
+        case arg: Tuple1[t1] => arg._1.asMatchable
         case _: Any          => arg
     end adjust
   end RWType
 
   final class Include[+T](val pattern: Pattern[T])
+
+  object empty extends Pattern[Nothing]:
+    def runPattern(nodeSpan: NodeSpan): Option[(Nothing, NodeSpan)] =
+      None
+  end empty
 
   private[forja] final class filter[T](
       val pattern: Pattern[T],

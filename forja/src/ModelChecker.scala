@@ -16,10 +16,12 @@ transparent trait ModelChecker:
     check() match
       case None                     => // ok
       case Some((errorState, path)) =>
+        val builder = StringBuilder()
         path.foreach: state =>
-          println(state.toString())
-          println("---")
-        println(errorState)
+          builder ++= state.toString()
+          builder ++= "\n---\n"
+        builder ++= errorState.toString()
+        throw AssertionError(builder.result())
     end match
   end assertCheck
 

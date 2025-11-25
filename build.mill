@@ -102,7 +102,7 @@ object forja extends ForjaModule:
       then TaskCtx.taskCtx.fail(s"out of date: ${src.path}")
       if check
       then println(s"ok ${src.path}")
-      else if didReplace
+      else if didReplace && replacedLines != os.read.lines(src.path)
       then
         println(s"rewrite ${src.path}")
         os.write.over(

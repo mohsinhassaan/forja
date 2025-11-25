@@ -57,7 +57,18 @@ object ReflectiveEnumeration:
                   m.pos
                     .map: pos =>
                       (pos.sourceFile.name, pos.start, pos.end)
-                    .getOrElse(("", 0, 0))
+                    .getOrElse:
+                      report.errorAndAbort(s"could not get position for $m")
+
+            syms
+              .groupBy(_.pos.get)
+              .foreach: (pos, syms) =>
+                if syms.size > 1
+                then
+                  report.errorAndAbort(
+                    s"multiple symbols have position $pos: ${syms.mkString(", ")}",
+                  )
+                end if
 
             val exprs = syms.map: sym =>
               '{

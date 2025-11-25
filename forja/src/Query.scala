@@ -164,6 +164,8 @@ object Query:
         pattern: Pattern[?],
     ): Chain[Either[RecordList[T, Q], RecordList[T, Q]]] =
       pattern match
+        case Pattern.empty =>
+          ???
         case pattern: Pattern.Tupled[?] =>
           ???
           // pattern.elems.foldLeft(

@@ -132,12 +132,17 @@ object syntax:
       Pattern.embed[T]
     end embed
 
-    def rep[T](elem: Pattern[T]): Pattern[List[T]] =
-      Pattern.rep(elem)
+    def rep[T <: Matchable](
+        elem: Pattern[T],
+    ): Pattern[List[Pattern.RWType[T]]] =
+      Pattern.rep(elem.map(Pattern.RWType.adjust))
     end rep
 
-    def rep1[T](elem: Pattern[T]): Pattern[List[T]] =
-      NodeSpan(+elem, +cc.rep(elem)).map(_ :: _)
+    def rep1[T <: Matchable](
+        elem: Pattern[T],
+    ): Pattern[List[Pattern.RWType[T]]] =
+      val elemM = elem.map(Pattern.RWType.adjust)
+      NodeSpan(+elemM, +cc.rep(elem)).map(_ :: _)
     end rep1
 
     def not[T](elem: Pattern[T]): Pattern[Unit] =

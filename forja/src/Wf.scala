@@ -91,7 +91,9 @@ object Wf:
                     else
                       // TODO: consider appending the error onto the end of the node's children
                       node.replaceThis:
-                        Node.error(s"wrong child count (saw $idx)")(node)
+                        Node.error(
+                          s"unmatched children remain, matched up to here (idx = $idx)",
+                        )((node.children.lift(idx).toList :+ node)*)
                     end if
                   case shape +: restShapes =>
                     if !node.children.indices.contains(idx)

@@ -26,7 +26,8 @@ object Pass:
       valuesByType[Query.rewrite[?]].view
         .map: (fieldName, rw) =>
           rw.pattern.map(_ => fieldName)
-        .reduce(_ | _)
+        .reduceOption(_ | _)
+        .getOrElse(Pattern.empty)
     end rewritesAgg
 
     final protected def performImpl(node: Node): Node =
@@ -77,9 +78,29 @@ object Pass:
       // Put our parents back
       node.replaceThis(replacementNode)
     end performImpl
+  end RewritePass
+
+  object RewritePass:
+    trait EmbedGenerator[T <: Matchable]
+        extends ReflectiveEnumeration.Enumerable:
+      given embed: Node.Embed[T] = deferred
+      def generate: Iterator[T]
+    end EmbedGenerator
+
+    final case class MCState(fieldName: String, node: Node, passNum: Int):
+      override def toString(): String =
+        s"$fieldName\n${node.toString()}"
+      override def hashCode(): Int = node.hashCode()
+      override def equals(that: Any): Boolean =
+        that.asMatchable match
+          case that: MCState =>
+            node.equals(that.node)
+          case _ => false
+        end match
+      end equals
+    end MCState
 
     trait ModelChecker extends forja.ModelChecker, ReflectiveEnumeration:
-      import RewritePass.MCState
       def inputWf: TokenWf
       def outputWf: TokenWf
 
@@ -110,6 +131,9 @@ object Pass:
             gen.embed -> (name, gen)
           .toMap
       end embedGenerators
+
+      private val rewritePasses: IArray[(String, RewritePass)] =
+        valuesByType[RewritePass]
 
       def initStates(using ExecutionContext): Iterator[MCState] =
         type Ident = Token | Node.Embed[?]
@@ -206,17 +230,25 @@ object Pass:
           .apply(inputWf.token)
           .iterator
           .map: node =>
-            MCState("<init>", node)
+            MCState("<init>", node, 0)
       end initStates
 
       def nextStates(state: MCState)(using
           ExecutionContext,
       ): Iterator[MCState] =
+        if state.passNum == rewritePasses.length
+        then return Iterator.empty
+        if state.node.containsError
+        then return Iterator.empty
+
+        val passNum = state.passNum
+        val (passName, pass) = rewritePasses(state.passNum)
+
         def impl(state: Node): Iterator[MCState] =
-          rewritesAgg
+          pass.rewritesAgg
             .runPattern(state.emptyNodeSpanHere)
             .map: (fieldName, nodeSpan) =>
-              MCState(fieldName, nodeSpan.root)
+              MCState(s"$passName.$fieldName", nodeSpan.root, passNum)
             .iterator
             ++ state.children.iterator
               .flatMap(impl)
@@ -225,30 +257,12 @@ object Pass:
               .flatMap(impl)
         end impl
 
-        impl(state.node)
+        val iter = impl(state.node)
+        if iter.hasNext
+        then iter
+        else nextStates(MCState(state.fieldName, state.node, state.passNum + 1))
       end nextStates
     end ModelChecker
-  end RewritePass
-
-  object RewritePass:
-    trait EmbedGenerator[T <: Matchable]
-        extends ReflectiveEnumeration.Enumerable:
-      given embed: Node.Embed[T] = deferred
-      def generate: Iterator[T]
-    end EmbedGenerator
-
-    final case class MCState(fieldName: String, node: Node):
-      override def toString(): String =
-        s"$fieldName\n${node.toString()}"
-      override def hashCode(): Int = node.hashCode()
-      override def equals(that: Any): Boolean =
-        that.asMatchable match
-          case that: MCState =>
-            node.equals(that.node)
-          case _ => false
-        end match
-      end equals
-    end MCState
   end RewritePass
 
   trait MultiPass extends Pass, ReflectiveEnumeration:
