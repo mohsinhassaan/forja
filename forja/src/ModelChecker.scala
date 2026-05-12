@@ -37,7 +37,7 @@ transparent trait ModelChecker:
 
     while stateQueue.nonEmpty && result.isEmpty
     do
-      val state = stateQueue.synchronized(stateQueue.dequeue)
+      val state = stateQueue.synchronized(stateQueue.dequeue())
       var hasNextStates = false
       nextStates(state).foreach: nextState =>
         hasNextStates = true

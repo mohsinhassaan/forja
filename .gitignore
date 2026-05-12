@@ -16,3 +16,4 @@ scala-doc/
 .fuzz_output/
 .ref_compare/
 *.jar
+.codium-data/

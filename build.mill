@@ -1,5 +1,5 @@
-//| mill-version: 1.0.6
-//| mill-jvm-version: temurin:24
+//| mill-version: 1.1.5
+//| mill-jvm-version: temurin:25
 //| mill-jvm-opts: ["--enable-native-access=ALL-UNNAMED"]
 //| mvnDeps:
 //| - com.goyeau::mill-scalafix::0.6.0
@@ -11,16 +11,16 @@ import mill.api.Task.Simple
 import mill.api.TaskCtx
 
 trait ForjaModule extends ScalaModule, ScalafixModule:
-  def scalaVersion = "3.7.3"
+  def scalaVersion = "3.8.3"
   def scalacOptions = Seq(
-    "-Werror",
-    "-Wunused:strict-no-implicit-warn",
+    // "-Werror",
     "-Yexplicit-nulls",
     "-deprecation",
     "-feature",
     "-source:future",
     "-Xcheck-macros",
     "-explain-cyclic",
+    "-preview",
   )
   override def forkArgs = super.forkArgs() ++ Seq(
     // TODO: fix when Scala 3.8?
@@ -45,6 +45,7 @@ object forja extends ForjaModule:
     mvn"com.lihaoyi::os-lib:0.11.5",
     mvn"org.typelevel::cats-core:2.13.0",
     mvn"io.github.java-diff-utils:java-diff-utils:4.15",
+    mvn"dev.zio::izumi-reflect:3.0.9",
   )
   object test extends ForjaTests
 
