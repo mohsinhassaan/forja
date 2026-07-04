@@ -30,122 +30,136 @@ object P:
         ???
       else if classSym.flags.is(Flags.Case)
       then
-        val instSym = Symbol.newMethod(
+        val erasedSym = Symbol.newClass(
+          owner = Symbol.spliceOwner,
+          name = s"Erased${classSym.name}",
+          parents = _ => List(TypeRepr.of[Object], TypeRepr.of[Erased]),
+          decls = sym => {
+            List(
+              Symbol.newMethod(sym, "rewriteInner", MethodType(List("fn"))(_ => List(TypeRepr.of[Erased => Erased]), _ => TypeRepr.of[Erased])),
+            )
+          },
+          selfType = None,
+          clsFlags = Flags.EmptyFlags,
+          clsPrivateWithin = Symbol.noSymbol,
+          clsAnnotations = Nil,
+          conMethodType = { resultTpe =>
+            MethodType(classSym.caseFields.map(fld => s"fld$$${fld.name}"))(
+              _ => classSym.caseFields.map(_.info),
+              _ => resultTpe,
+            )
+          },
+          conFlags = Flags.EmptyFlags,
+          conPrivateWithin = Symbol.noSymbol,
+          conParamFlags = List(classSym.caseFields.map(_ => Flags.ParamAccessor)),
+          conParamPrivateWithins = List(classSym.caseFields.map(_ => Symbol.noSymbol)),
+        )
+        val metaSym = Symbol.newClass(
           Symbol.spliceOwner,
-          "inst",
-          MethodType(
-            classSym.caseFields.map(fld => s"fld$$${fld.name}")
-          )(
-            { _ =>
-              classSym.caseFields.map(fld => fld.info)
-            }, { _ =>
-              TypeRepr.of[Erased]
-            },
-          ),
+          s"Meta${classSym.name}",
+          List(TypeRepr.of[Object], TypeRepr.of[Meta[T]]),
+          { sym =>
+            List(
+              Symbol.newMethod(
+                sym,
+                "erase",
+                MethodType(List("t"))(
+                  { sym => List(TypeRepr.of[T]) },
+                  { sym => TypeRepr.of[Erased] },
+                ),
+                Flags.Inline & Flags.Method,
+                Symbol.noSymbol,
+              ),
+            )
+          },
+          None,
         )
 
         Block(
           List(
-            DefDef(
-              instSym,
-              {
-                case List(instArgs) =>
-                  val freshCls = Symbol.newClass(
-                    owner = instSym,
-                    name = s"Erased${classSym.name}",
-                    parents = List(TypeRepr.of[Object], TypeRepr.of[Erased]),
-                    decls = sym => {
-                      List(
-                        Symbol.newMethod(sym, "rewriteInner", MethodType(List("fn"))(_ => List(TypeRepr.of[Erased => Erased]), _ => TypeRepr.of[Erased])),
-                      ) :::
-                      classSym.caseFields.map: fld =>
-                        Symbol.newVal(
-                          sym,
-                          s"fld$$${fld.name}",
-                          fld.info,
-                          Flags.EmptyFlags,
-                          Symbol.noSymbol,
-                        )
-                    },
-                    selfType = None,
-                  )
-                  Some {
-                    Block(
-                      List(
-                        ClassDef(
-                          cls = freshCls,
-                          parents = List(TypeTree.of[Object], TypeTree.of[Erased]),
-                          body = List(
-                            DefDef(freshCls.methodMember("rewriteInner").head, {
-                              case List(List(fn)) =>
-                                val sym = freshCls.methodMember("rewriteInner").head
-                                given Quotes = sym.asQuotes
-                                Some:
-                                  ValDef.let(
-                                    sym,
-                                    freshCls.declaredFields.map { fld =>
-                                      fld.info.asType match
-                                        case '[ft] =>
-                                          Expr.summon[RewriteInner[ft]] match
-                                            case Some(rwInner) =>
-                                              '{
-                                                $rwInner.rewriteInner(
-                                                  ${ This(freshCls).select(fld).asExprOf[ft] },
-                                                  ${fn.asExprOf[Erased => Erased]},
-                                                )
-                                              }.asTerm
-                                            case None =>
-                                              report.errorAndAbort(s"no rewrite rule for ${TypeRepr.of[ft].show}")
-                                          end match
-                                      end match
-                                    },
-                                  ) { binds =>
-                                    val didChangeExpr = freshCls.declaredFields
-                                      .zip(binds)
-                                      .map: (fld, bind) =>
-                                        '{ ${This(freshCls).select(fld).asExpr}.asInstanceOf[AnyRef] ne ${bind.asExpr}.asInstanceOf[AnyRef] }
-                                      .foldLeft('{ false })((l, r) => '{ $l || $r })
-                                    end didChangeExpr
-                                    '{
-                                      val didChange = $didChangeExpr
-                                      if didChange
-                                      then ${
-                                        Ref(instSym)
-                                          .appliedToArgs(freshCls.declaredFields.map(This(freshCls).select))
-                                          .asExprOf[Erased]
-                                      }
-                                      else ${This(freshCls).asExprOf[Erased]}
-                                    }
-                                    .asTerm
-                                  }
-                              case _ => ???
-                            })
-                          ) ::: freshCls.declaredFields.zip(instArgs).map: (fld, instArg) =>
-                            ValDef.apply(fld, Some(instArg.asExpr.asTerm)),
-                        )
-                      ),
-                      New(TypeTree.ref(freshCls))
-                        .select(freshCls.primaryConstructor)
-                        .appliedToArgs(Nil),
-                    )
-                  }
-                case _ => ???
-              },
+            ClassDef(
+              cls = erasedSym,
+              parents = List(TypeTree.of[Object], TypeTree.of[Erased]),
+              body = List(
+                DefDef(erasedSym.declaredMethod("rewriteInner").head, {
+                  case List(List(fn)) =>
+                    val sym = erasedSym.methodMember("rewriteInner").head
+                    given Quotes = sym.asQuotes
+                    Some:
+                      ValDef.let(
+                        sym,
+                        erasedSym.declaredFields.map { fld =>
+                          fld.info.asType match
+                            case '[ft] =>
+                              Expr.summon[RewriteInner[ft]] match
+                                case Some(rwInner) =>
+                                  '{
+                                    $rwInner.rewriteInner(
+                                      ${ This(erasedSym).select(fld).asExprOf[ft] },
+                                      ${ fn.asExprOf[Erased => Erased] },
+                                    )
+                                  }.asTerm
+                                case None =>
+                                  report.errorAndAbort(s"no rewrite rule for ${TypeRepr.of[ft].show}")
+                              end match
+                          end match
+                        },
+                      ) { binds =>
+                        val didChangeExpr = erasedSym.declaredFields
+                          .zip(binds)
+                          .map: (fld, bind) =>
+                            This(erasedSym).select(fld).asExpr match
+                              case '{ $nv: AnyRef } =>
+                                '{ $nv ne ${ bind.asExpr }.asInstanceOf[AnyRef] }
+                              case '{ $nv: nvT } =>
+                                '{ $nv != ${ bind.asExpr} }
+                            end match
+                          .foldLeft('{ false })((l, r) => '{ $l || $r })
+                        end didChangeExpr
+                        '{
+                          val didChange = $didChangeExpr
+                          if didChange
+                          then ${
+                            New(TypeIdent(erasedSym))
+                              .select(erasedSym.primaryConstructor)
+                              .appliedToArgs(erasedSym.declaredFields.map(This(erasedSym).select))
+                              .asExprOf[Erased]
+                          }
+                          else ${This(erasedSym).asExprOf[Erased]}
+                        }
+                        .asTerm
+                      }
+                  case _ => ???
+                })
+              )
             ),
+            ClassDef(
+              metaSym,
+              List(TypeTree.of[Object], TypeTree.of[Meta[T]]),
+              List(
+                DefDef(
+                  metaSym.declaredMethod("erase").head,
+                  {
+                    case List(List(t)) =>
+                      Some:
+                        New(TypeIdent(erasedSym))
+                          .select(erasedSym.primaryConstructor)
+                          .appliedToArgs:
+                            classSym.caseFields
+                              .map: fld =>
+                                t
+                                  .asExpr
+                                  .asTerm
+                                  .select(fld)
+                    case _ => ???
+                  },
+                )
+              ),
+            )
           ),
-          '{
-            new Meta[T]:
-              def erase(t: T): Erased = ${
-                Ref(instSym)
-                  .appliedToArgs:
-                    classSym.caseFields
-                      .map: fld =>
-                        '{ t }.asTerm.select(fld)
-                  .asExprOf[Erased]
-              }
-            end new
-          }
-          .asTerm
+          New(TypeIdent(metaSym))
+            .select(metaSym.primaryConstructor)
+            .appliedToArgs(Nil)
         )
         .asExprOf[Meta[T]]
       else
@@ -154,8 +168,8 @@ object P:
     end derivedImpl
   end Meta
 
-  given [T] => (meta: Meta[T]) => Conversion[T, P[T]]:
-    def apply(x: T): P[T] = meta.erase(x)
+  given [T, U <: T] => (meta: Meta[T]) => Conversion[U, P[T]]:
+    def apply(x: U): P[T] = meta.erase(x)
   end given
 
   trait Erased:
