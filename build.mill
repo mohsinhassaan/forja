@@ -11,7 +11,7 @@ import mill.api.Task.Simple
 import mill.api.TaskCtx
 
 trait ForjaModule extends ScalaModule, ScalafixModule:
-  def scalaVersion = "3.8.3"
+  def scalaVersion = "3.8.4"
   def scalacOptions = Seq(
     // "-Werror",
     "-Yexplicit-nulls",
@@ -21,6 +21,7 @@ trait ForjaModule extends ScalaModule, ScalafixModule:
     "-Xcheck-macros",
     "-explain-cyclic",
     "-preview",
+    "-experimental",
   )
   override def forkArgs = super.forkArgs() ++ Seq(
     // TODO: fix when Scala 3.8?
