@@ -4,12 +4,25 @@ import scala.quoted.Quotes
 import scala.quoted.Type
 import scala.quoted.quotes
 import scala.quoted.Expr
+import scala.util.NotGiven
+import scala.quoted.Varargs
+import scala.annotation.implicitNotFound
+import scala.compiletime.summonInline
 
 into opaque type P[T] = P.Erased
 
 object P:
+  @implicitNotFound("${T} or its sealed supertype needs to derive P.Meta")
   trait Meta[T]:
     def erase(t: T): Erased
+    // Gotcha: this could more sensibly convert to P[T], but some interaction of the opaque type
+    // being in scope here and the macro definitions below breaks things. The error looks like
+    // the macro hardcodes Erased where I lexically wrote P[T], causing the compiler to notice later
+    // on that def conversion: Conversion[T, Erased] would not implement the P[T] version.
+    // I guess this is because the macro is expanded in another file...
+    // Instead, we use Conversion's variance to replace Erased with P[T] during the given that calls
+    // this method.
+    def conversion: Conversion[T, Erased]
   end Meta
 
   object Meta:
@@ -18,21 +31,70 @@ object P:
     private def derivedImpl[T : Type](using Quotes): Expr[Meta[T]] =
       import quotes.reflect.*
 
-      val tp = TypeRepr.of[T]
-      val classSym = tp.classSymbol.get
-      if classSym.flags.is(Flags.Sealed) && classSym.flags.is(Flags.Abstract)
+      val tpTree = TypeTree.of[T]
+      println(s"process: ${tpTree.show}")
+      if tpTree.symbol.flags.is(Flags.Sealed) && tpTree.symbol.flags.is(Flags.Abstract)
       then
-        // TODO: the derives clause only applies to the type on which it is declared.
-        // So, if you say a whole enum derives P.Meta, we get one instance for the overall enum type.
-        // Two interesting questions:
-        // 1. We are Meta[T] and we got given U <: T; do we have to do runtime type dispatch every time?
-        // 2. How to accept being truly given a supertype, so passing T above also works.
-        ???
-      else if classSym.flags.is(Flags.Case)
+        println(s"abstract: ${tpTree.show}")
+        '{
+          final class GeneratedMeta extends Conversion[T, Erased], Meta[T]:
+            // TODO: array is simpler, but if it's ever a bottleneck then we can generate a synthetic fieldset
+            private val subMetas: Array[Meta[?]] =
+              ${
+                val childMetas = tpTree.symbol.children.map: childSym =>
+                  childSym.typeRef.asType match
+                    case '[ch] => '{ derived[ch] }
+                end childMetas
+                '{ Array(${Varargs(childMetas)}*) }
+              }
+            end subMetas
+
+            def erase(t: T): Erased =
+              val subMetasProxy = subMetas
+              ${
+                Match(
+                  '{t}.asTerm,
+                  tpTree.symbol.children.zipWithIndex.map { (childSym, idx) =>
+                    def branchBody =
+                      '{ subMetasProxy(${Expr(idx)}).asInstanceOf[Meta[T]].erase(t) }.asTerm
+                    end branchBody
+                    if childSym.isTerm
+                    then
+                      CaseDef(
+                        Ref(childSym),
+                        None,
+                        branchBody,
+                      )
+                    else if childSym.isType
+                    then
+                      TypeTree.ref(childSym).tpe.asType match
+                        case '[cT] =>
+                          CaseDef(
+                            Typed(Wildcard(), TypeTree.of[cT]),
+                            None,
+                            branchBody,
+                          )
+                    else
+                      report.errorAndAbort(s"neither a term nor a type $childSym")
+                    end if
+                  },
+                )
+                  .asExprOf[Erased]
+              }
+            end erase
+            
+            def conversion: Conversion[T, Erased] = this
+
+            def apply(t: T): Erased = erase(t)
+          end GeneratedMeta
+
+          new GeneratedMeta
+        }
+      else if tpTree.symbol.flags.is(Flags.Case)
       then
         val erasedSym = Symbol.newClass(
           owner = Symbol.spliceOwner,
-          name = s"Erased${classSym.name}",
+          name = s"Erased${tpTree.symbol.name}",
           parents = _ => List(TypeRepr.of[Object], TypeRepr.of[Erased]),
           decls = sym => {
             List(
@@ -44,35 +106,15 @@ object P:
           clsPrivateWithin = Symbol.noSymbol,
           clsAnnotations = Nil,
           conMethodType = { resultTpe =>
-            MethodType(classSym.caseFields.map(fld => s"fld$$${fld.name}"))(
-              _ => classSym.caseFields.map(_.info),
+            MethodType(tpTree.symbol.caseFields.map(fld => s"fld$$${fld.name}"))(
+              _ => tpTree.symbol.caseFields.map(fld => Ref(fld).tpe.widen),
               _ => resultTpe,
             )
           },
           conFlags = Flags.EmptyFlags,
           conPrivateWithin = Symbol.noSymbol,
-          conParamFlags = List(classSym.caseFields.map(_ => Flags.ParamAccessor)),
-          conParamPrivateWithins = List(classSym.caseFields.map(_ => Symbol.noSymbol)),
-        )
-        val metaSym = Symbol.newClass(
-          Symbol.spliceOwner,
-          s"Meta${classSym.name}",
-          List(TypeRepr.of[Object], TypeRepr.of[Meta[T]]),
-          { sym =>
-            List(
-              Symbol.newMethod(
-                sym,
-                "erase",
-                MethodType(List("t"))(
-                  { sym => List(TypeRepr.of[T]) },
-                  { sym => TypeRepr.of[Erased] },
-                ),
-                Flags.Inline & Flags.Method,
-                Symbol.noSymbol,
-              ),
-            )
-          },
-          None,
+          conParamFlags = List(tpTree.symbol.caseFields.map(_ => Flags.ParamAccessor)),
+          conParamPrivateWithins = List(tpTree.symbol.caseFields.map(_ => Symbol.noSymbol)),
         )
 
         Block(
@@ -88,22 +130,27 @@ object P:
                     Some:
                       ValDef.let(
                         sym,
-                        erasedSym.declaredFields.map { fld =>
-                          fld.info.asType match
-                            case '[ft] =>
-                              Expr.summon[RewriteInner[ft]] match
-                                case Some(rwInner) =>
-                                  '{
-                                    $rwInner.rewriteInner(
-                                      ${ This(erasedSym).select(fld).asExprOf[ft] },
-                                      ${ fn.asExprOf[Erased => Erased] },
+                        erasedSym.declaredFields
+                          .zip(tpTree.symbol.caseFields)
+                          .map { (fld, origFld) =>
+                            Ref(fld).tpe.widen.asType match
+                              case '[ft] =>
+                                Implicits.search(TypeRepr.of[RewriteInner[ft]]) match
+                                  case success: ImplicitSearchSuccess =>
+                                    '{
+                                      ${ success.tree.asExprOf[RewriteInner[ft]] }.rewriteInner(
+                                        ${ This(erasedSym).select(fld).asExprOf[ft] },
+                                        ${ fn.asExprOf[Erased => Erased] },
+                                      )
+                                    }.asTerm
+                                  case failure: ImplicitSearchFailure =>
+                                    report.errorAndAbort(
+                                      failure.explanation,
+                                      origFld.pos.getOrElse(Position.ofMacroExpansion),
                                     )
-                                  }.asTerm
-                                case None =>
-                                  report.errorAndAbort(s"no rewrite rule for ${TypeRepr.of[ft].show}")
-                              end match
-                          end match
-                        },
+                                end match
+                            end match
+                          },
                       ) { binds =>
                         val didChangeExpr = erasedSym.declaredFields
                           .zip(binds)
@@ -129,48 +176,52 @@ object P:
                         }
                         .asTerm
                       }
-                  case _ => ???
+                  case _ => throw RuntimeException("unreachable")
                 })
               )
             ),
-            ClassDef(
-              metaSym,
-              List(TypeTree.of[Object], TypeTree.of[Meta[T]]),
-              List(
-                DefDef(
-                  metaSym.declaredMethod("erase").head,
-                  {
-                    case List(List(t)) =>
-                      Some:
-                        New(TypeIdent(erasedSym))
-                          .select(erasedSym.primaryConstructor)
-                          .appliedToArgs:
-                            classSym.caseFields
-                              .map: fld =>
-                                t
-                                  .asExpr
-                                  .asTerm
-                                  .select(fld)
-                    case _ => ???
-                  },
-                )
-              ),
-            )
           ),
-          New(TypeIdent(metaSym))
-            .select(metaSym.primaryConstructor)
-            .appliedToArgs(Nil)
+          '{
+            final class GeneratedMeta extends Conversion[T, Erased], Meta[T]:
+              def erase(t: T): Erased =
+                ${
+                  New(TypeIdent(erasedSym))
+                    .select(erasedSym.primaryConstructor)
+                    .appliedToArgs:
+                      tpTree.symbol.caseFields
+                        .map: fld =>
+                          '{t}
+                            .asTerm
+                            .select(fld)
+                    .asExprOf[Erased]
+                }
+              end erase
+
+              def conversion: Conversion[T, Erased] = this
+
+              def apply(t: T): Erased = erase(t)
+            end GeneratedMeta
+
+            new GeneratedMeta
+          }
+          .asTerm,
         )
         .asExprOf[Meta[T]]
       else
-        report.errorAndAbort(s"${tp.show} is neither a case class nor a sealed abstract type")
+        report.errorAndAbort(s"${tpTree.show} is neither a case class nor a sealed abstract type")
       end if
     end derivedImpl
   end Meta
 
-  given [T, U <: T] => (meta: Meta[T]) => Conversion[U, P[T]]:
-    def apply(x: U): P[T] = meta.erase(x)
-  end given
+  // Implicit lookup on traits with variance can be glitchy, so this manually implements the
+  // "subtyping" rule that a Meta[U <: T] can be implemented via a Meta[T]. It is just redundant that
+  // the first operation in erase(u) will therefore be to check that u instanceof U.
+  inline given [T, U <: T] => (meta: Meta[T]) => (=>NotGiven[U =:= T]) => Meta[U] = meta.asInstanceOf
+
+  // This awkward pattern lets us customize the implicit not found message.
+  // Technically the Conversion is considered to "succeed", even if all it does is immediately
+  // fail summonInline, therefore showing the failure for looking up Meta[T], not Conversion[T, P[T]].
+  inline given [T] => Conversion[T, P[T]] = summonInline[Meta[T]].conversion
 
   trait Erased:
     def rewriteInner(fn: Erased => Erased): Erased
@@ -180,11 +231,16 @@ object P:
     def fixpoint(fn: [U] => P[U] => P[U]): P[T] = ???
   end extension
 
+  @implicitNotFound("no rule found to rewrite P[?] inside ${T}")
   trait RewriteInner[T]:
     def rewriteInner(t: T, fn: Erased => Erased): T
   end RewriteInner
 
   object RewriteInner:
+    given RewriteInner[Boolean]:
+      inline def rewriteInner(t: Boolean, fn: Erased => Erased): Boolean = t
+    end given
+
     given RewriteInner[Byte]:
       inline def rewriteInner(t: Byte, fn: Erased => Erased): Byte = t
     end given
