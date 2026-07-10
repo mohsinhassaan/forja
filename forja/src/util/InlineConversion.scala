@@ -9,6 +9,6 @@ object InlineConversion:
     inline def apply(t: T): U = t.asInstanceOf[U]
   end ByCast
   object ByCast:
-    def apply[T, U]: ByCast[T, U] = null.asInstanceOf[ByCast[T, U]]
+    inline def apply[T, U](): ByCast[T, U] = null.asInstanceOf
   end ByCast
 end InlineConversion

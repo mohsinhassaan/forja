@@ -6,6 +6,8 @@ import scala.annotation.publicInBinary
 import scala.deriving.Mirror
 import forja.util.Instanceless
 import forja.util.InlineConversion
+import java.util.Objects
+import scala.compiletime.asMatchable
 
 trait Lang:
   final transparent inline given this.type = this
@@ -51,16 +53,8 @@ object Lang:
     end Opaque
     override type T = Opaque.T
 
-    inline given subtype: [T] => NotGiven[ReplaceWith[?]] => (et: Sum.EffectiveType[Case]) => Conversion[et.T, this.T] = CastConversion[et.T, Sum.this.T]
+    inline given subtype: [T] => (inline ng: NotGiven[ReplaceWith[?]]) => (et: Sum.EffectiveType[Case]) => InlineConversion.ByCast[et.T, this.T] = InlineConversion.ByCast()
   end Sum
-
-  sealed trait CastConversion[-T, +U] extends Conversion[T, U]:
-    def apply(x: T): U = x.asInstanceOf
-  end CastConversion
-  object CastConversion:
-    private object inst extends CastConversion[?, ?]
-    def apply[T, U]: CastConversion[T, U] = inst.asInstanceOf
-  end CastConversion
 
   object Sum:
     sealed trait EffectiveType[C <: Sum#Case] extends Instanceless:
@@ -91,14 +85,27 @@ object Lang:
 
   abstract class Term[Members <: NamedTuple.AnyNamedTuple] extends Node:
     self: Singleton =>
-    final class T @publicInBinary private[Term] (private[Term] val members: Tuple)
+    final class T @publicInBinary private[Term] (private[Term] val members: Tuple):
+      override def toString(): String = s"${self.getClass().getName()}$members"
+      override def equals(obj: Any): Boolean =
+        obj.asMatchable match
+          case other: T => members == other.members
+        end match
+      end equals
+      override def hashCode(): Int =
+        Objects.hash(self, members)
+      end hashCode
+    end T
     
     inline def apply(using inline ng: NotGiven[ReplaceWith[?]])(using et: EffectiveType[Members])(members: et.To): T =
       T(members.asInstanceOf)
     end apply
 
-    inline def unapply(using inline ng: NotGiven[ReplaceWith[?]])(using et: EffectiveType[Members])(t: T): Some[et.To] =
-      Some(t.members.asInstanceOf)
+    // Patterns and inline do not go well together. Making this inline will create and then call
+    // a lambda with the inline body, which is strictly worse than just calling the method.
+    // This issue only happens in patterns; the apply above translates to new T properly.
+    def unapply(t: T)(using ng: NotGiven[ReplaceWith[?]])(using et: EffectiveType[Members]): et.To =
+      t.members.asInstanceOf[et.To]
     end unapply
   end Term
 
@@ -113,7 +120,7 @@ object Lang:
     inline def apply[From <: Node, To <: Node](): EffectiveNodeType.Aux[From, To] = Instanceless[EffectiveNodeType.Aux[From, To]]
   end EffectiveNodeType
 
-  inline given effectiveNodeIdentity: [N <: Node] => (N: N) => NotGiven[N.ReplaceWith[?]] => EffectiveNodeType.Aux[N, N] = EffectiveNodeType()
+  inline given effectiveNodeIdentity: [N <: Node] => (N: N) => (inline ng: NotGiven[N.ReplaceWith[?]]) => EffectiveNodeType.Aux[N, N] = EffectiveNodeType()
   inline given effectiveNodeReplaced: [N1 <: Node, N2 <: Node] => (N1: N1) => (N1.ReplaceWith[N2]) => (et: EffectiveNodeType[N2]) => EffectiveNodeType.Aux[N1, et.To] = EffectiveNodeType()
 
   sealed trait EffectiveType[From] extends Instanceless:
@@ -138,10 +145,22 @@ object Lang:
   // intersection.
   inline given effectiveNode: [T] => (tn: Node.TNode[T & Node#T]) => (ent: EffectiveNodeType[tn.N]) => (N2: ent.To) => EffectiveType.Aux[T, N2.T] = EffectiveType()
 
-  inline given effectiveTupleEmpty: EffectiveType.Aux[EmptyTuple, EmptyTuple] = EffectiveType()
-  inline given effectiveTupleCons: [H, Tl <: Tuple] => (eh: EffectiveType[H]) => (et: EffectiveType[Tl]) => EffectiveType.Aux[H *: Tl, eh.To *: (et.To & Tuple)] = EffectiveType()
+  trait EffectiveTupleType[From <: Tuple]:
+    type To <: Tuple
+  end EffectiveTupleType
+  object EffectiveTupleType:
+    type Aux[From <: Tuple, To0 <: Tuple] = EffectiveTupleType[From] {
+      type To = To0
+    }
 
-  inline given effectiveNamedTuple: [Nt <: NamedTuple.AnyNamedTuple] => (et: EffectiveType[NamedTuple.DropNames[Nt]]) => EffectiveType.Aux[Nt, NamedTuple.NamedTuple[NamedTuple.Names[Nt], et.To & Tuple]] = EffectiveType()
+    inline def apply[From <: Tuple, To <: Tuple](): Aux[From, To] = Instanceless[Aux[From, To]]
+
+    inline given effectiveTupleEmpty: Aux[EmptyTuple, EmptyTuple] = EffectiveTupleType()
+    inline given effectiveTupleCons: [Hd, Tl <: Tuple] => (eh: EffectiveType[Hd]) => (et: EffectiveTupleType[Tl]) => EffectiveTupleType.Aux[Hd *: Tl, eh.To *: et.To] = EffectiveTupleType()
+  end EffectiveTupleType
+
+  inline given effectiveTuple: [T <: Tuple] => (ett: EffectiveTupleType[T]) => EffectiveType.Aux[T, ett.To] = EffectiveType()
+  inline given effectiveNamedTuple: [Nt <: NamedTuple.AnyNamedTuple] => (et: EffectiveTupleType[NamedTuple.DropNames[Nt]]) => EffectiveType.Aux[Nt, NamedTuple.NamedTuple[NamedTuple.Names[Nt], et.To]] = EffectiveType()
 
   inline given EffectiveType.Ident[Boolean] = EffectiveType.Ident()
   inline given EffectiveType.Ident[Byte] = EffectiveType.Ident()
@@ -172,7 +191,9 @@ object Test:
     object L1 extends L1
 
     val x = L1.Foo(i = 42, j = 43)
+    println(x)
     val ping: L1.Ping.T = L1.Ping.Pong(k = 12, foo = x)
+    println(ping)
 
     trait L2 extends Lang.Extend[L1]:
       export up.{
@@ -188,6 +209,18 @@ object Test:
     object L2 extends L2
 
     val y: L2.Bar.T = L2.Bar(s = "hi", opt = Some(L2.Bar("ho", None)))
+    println(y)
     val ping2: L2.Ping.T = y
+    println(ping2)
+
+    y match
+      case L2.Bar(s, opt) =>
+        println((s, opt))
+    end match
+
+    ping2.ex match
+      case L2.Bar(s, opt) =>
+        println(s"$s, $opt")
+    end match
   end main
 end Test
