@@ -1,7 +1,11 @@
 package forja
 
 import scala.util.NotGiven
-import forja.util.TupleOf
+import scala.reflect.TypeTest
+import scala.annotation.publicInBinary
+import scala.deriving.Mirror
+import forja.util.Instanceless
+import forja.util.InlineConversion
 
 trait Lang:
   final transparent inline given this.type = this
@@ -12,29 +16,16 @@ object Lang:
 
   abstract class Node:
     final transparent inline given this.type = this
-    class Retract
-    class Replace[OtherNode <: Node] extends Retract
+    class ReplaceWith[OtherNode <: Node]
+    class Retract extends ReplaceWith[Node.Empty.type]
 
-    // Must be defined in a nested object, or _all subclasses_
-    // can see T is just Data and typecheck accordingly.
-    // That makes a huge mess.
-    // That said, X.Scope.T does not look terrible in type annotations.
-    object Scope:
-      into opaque type T = Data
-      def T(data: Data): T = data
-      extension (t: T)
-        def data: Data = t
-      end extension
-    end Scope
-    export Scope.*
+    type T
 
-    given Node.TNode.Aux[T, this.type] = new Node.TNode[T]:
-      type N = Node.this.type
-    end given
+    inline given Node.TNode.Aux[T, this.type] = Instanceless[Node.TNode.Aux[T, this.type]]
   end Node
 
   object Node:
-    sealed trait TNode[T <: Node#T]:
+    sealed trait TNode[T <: Node#T] extends Instanceless:
       type N <: Node
     end TNode
     object TNode:
@@ -42,30 +33,76 @@ object Lang:
         type N = N0
       }
     end TNode
+
+    object Empty extends Node:
+      type T = Nothing
+    end Empty
   end Node
 
   abstract class Sum extends Node:
-    // Plan: the user implements this type with a sealed class which all implementing productions extend.
-    // As a result the compiler will keep track of which values this Sum should accept.
-    // To extend, add a nexted Extend class that mashes this Case and its Case together.
-    // To shrink, we should take into account C <: Case, C.Retract being present and stop accepting that case.
     type Case <: Node
+    object Opaque:
+      into opaque type T = Any
+      extension (t: T)
+        inline def ex(using inline ng: NotGiven[ReplaceWith[?]])(using et: Sum.EffectiveType[Case]): et.T =
+          t.asInstanceOf
+        end ex
+      end extension
+    end Opaque
+    override type T = Opaque.T
 
-    // TODO: Sum working at all.
-    // Technically it is a Node and so its T and Retract/Replace work, but it is not instantiable.
+    inline given subtype: [T] => NotGiven[ReplaceWith[?]] => (et: Sum.EffectiveType[Case]) => Conversion[et.T, this.T] = CastConversion[et.T, Sum.this.T]
+  end Sum
+
+  sealed trait CastConversion[-T, +U] extends Conversion[T, U]:
+    def apply(x: T): U = x.asInstanceOf
+  end CastConversion
+  object CastConversion:
+    private object inst extends CastConversion[?, ?]
+    def apply[T, U]: CastConversion[T, U] = inst.asInstanceOf
+  end CastConversion
+
+  object Sum:
+    sealed trait EffectiveType[C <: Sum#Case] extends Instanceless:
+      type T <: Node#T
+    end EffectiveType
+    object EffectiveType:
+      type Aux[C <: Sum#Case, T0 <: Node#T] = EffectiveType[C] {
+        type T = T0
+      }
+
+      inline given inst: [C <: Sum#Case] => (mirror: Mirror.SumOf[C]) => (tc: TransformedCases[mirror.MirroredElemTypes]) => EffectiveType.Aux[C, tc.C] = Instanceless[EffectiveType.Aux[C, tc.C]]
+    end EffectiveType
+
+    sealed trait TransformedCases[Cases <: Tuple] extends Instanceless:
+      type C <: Node#T
+    end TransformedCases
+    object TransformedCases:
+      type Aux[Cases <: Tuple, C0 <: Node#T] = TransformedCases[Cases] {
+        type C = C0
+      }
+
+      inline def apply[Cases <: Tuple, C <: Node#T](): Aux[Cases, C] = Instanceless[Aux[Cases, C]]
+
+      inline given empty: TransformedCases.Aux[EmptyTuple, Nothing] = TransformedCases()
+      inline given cons: [Hd, Tl <: Tuple] => (eht: EffectiveNodeType[Hd & Node]) => (HN: eht.To) => (ttl: TransformedCases[Tl]) => TransformedCases.Aux[Hd *: Tl, HN.T | ttl.C] = TransformedCases()
+    end TransformedCases
   end Sum
 
   abstract class Term[Members <: NamedTuple.AnyNamedTuple] extends Node:
     self: Singleton =>
+    final class T @publicInBinary private[Term] (private[Term] val members: Tuple)
     
-    inline def apply(using inline ng: NotGiven[Retract])(using et: EffectiveType[Members])(members: et.To): T =
-      T(Data(this, members.asInstanceOf[Tuple]))
+    inline def apply(using inline ng: NotGiven[ReplaceWith[?]])(using et: EffectiveType[Members])(members: et.To): T =
+      T(members.asInstanceOf)
     end apply
+
+    inline def unapply(using inline ng: NotGiven[ReplaceWith[?]])(using et: EffectiveType[Members])(t: T): Some[et.To] =
+      Some(t.members.asInstanceOf)
+    end unapply
   end Term
 
-  final class Data(val term: Term[?], val fields: Tuple)
-
-  sealed trait EffectiveNodeType[From <: Node]:
+  sealed trait EffectiveNodeType[From <: Node] extends Instanceless:
     type To <: Node
   end EffectiveNodeType
   object EffectiveNodeType:
@@ -73,15 +110,13 @@ object Lang:
       type To = To0
     }
 
-    def apply[From <: Node, To0 <: Node]: Aux[From, To0] = new EffectiveNodeType[From]:
-      type To = To0
-    end apply
+    inline def apply[From <: Node, To <: Node](): EffectiveNodeType.Aux[From, To] = Instanceless[EffectiveNodeType.Aux[From, To]]
   end EffectiveNodeType
 
-  given [N <: Node] => (N: N) => NotGiven[N.Retract] => EffectiveNodeType.Aux[N, N] = EffectiveNodeType.apply
-  given [N1 <: Node, N2 <: Node] => (N1: N1) => (N1.Replace[N2]) => (et: EffectiveNodeType[N2]) => EffectiveNodeType.Aux[N1, et.To] = EffectiveNodeType.apply
+  inline given effectiveNodeIdentity: [N <: Node] => (N: N) => NotGiven[N.ReplaceWith[?]] => EffectiveNodeType.Aux[N, N] = EffectiveNodeType()
+  inline given effectiveNodeReplaced: [N1 <: Node, N2 <: Node] => (N1: N1) => (N1.ReplaceWith[N2]) => (et: EffectiveNodeType[N2]) => EffectiveNodeType.Aux[N1, et.To] = EffectiveNodeType()
 
-  sealed trait EffectiveType[From]:
+  sealed trait EffectiveType[From] extends Instanceless:
     type To
   end EffectiveType
   object EffectiveType:
@@ -89,57 +124,70 @@ object Lang:
       type To = To0
     }
 
-    def apply[From, To0]: Aux[From, To0] = new EffectiveType[From] {
-      type To = To0
-    }
-
     trait Ident[T] extends EffectiveType[T]:
       type To = T
     end Ident
+    object Ident:
+      inline def apply[T](): Ident[T] = Instanceless[Ident[T]]
+    end Ident
+
+    inline def apply[From, To](): EffectiveType.Aux[From, To] = Instanceless[EffectiveType.Aux[From, To]]
   end EffectiveType
 
   // Wacky: if T is bounded, implicit search fails. Instead, hack it into trying no matter what T is, and fix the TNode bound using an
   // intersection.
-  given [T] => (tn: Node.TNode[T & Node#T]) => (ent: EffectiveNodeType[tn.N]) => (N2: ent.To) => EffectiveType.Aux[T, N2.T] = EffectiveType.apply
+  inline given effectiveNode: [T] => (tn: Node.TNode[T & Node#T]) => (ent: EffectiveNodeType[tn.N]) => (N2: ent.To) => EffectiveType.Aux[T, N2.T] = EffectiveType()
 
-  given EffectiveType.Aux[EmptyTuple, EmptyTuple] = EffectiveType.apply
-  given [H, Tl <: Tuple] => (eh: EffectiveType[H]) => (et: EffectiveType[Tl]) => EffectiveType.Aux[H *: Tl, eh.To *: (et.To & Tuple)] = EffectiveType.apply
+  inline given effectiveTupleEmpty: EffectiveType.Aux[EmptyTuple, EmptyTuple] = EffectiveType()
+  inline given effectiveTupleCons: [H, Tl <: Tuple] => (eh: EffectiveType[H]) => (et: EffectiveType[Tl]) => EffectiveType.Aux[H *: Tl, eh.To *: (et.To & Tuple)] = EffectiveType()
 
-  given [Nt <: NamedTuple.AnyNamedTuple] => (et: EffectiveType[NamedTuple.DropNames[Nt]]) => EffectiveType.Aux[Nt, NamedTuple.NamedTuple[NamedTuple.Names[Nt], et.To & Tuple]] = EffectiveType.apply
+  inline given effectiveNamedTuple: [Nt <: NamedTuple.AnyNamedTuple] => (et: EffectiveType[NamedTuple.DropNames[Nt]]) => EffectiveType.Aux[Nt, NamedTuple.NamedTuple[NamedTuple.Names[Nt], et.To & Tuple]] = EffectiveType()
 
-  given EffectiveType.Ident[Boolean]
-  given EffectiveType.Ident[Byte]
-  given EffectiveType.Ident[Char]
-  given EffectiveType.Ident[Short]
-  given EffectiveType.Ident[Int]
-  given EffectiveType.Ident[Long]
-  given EffectiveType.Ident[Float]
-  given EffectiveType.Ident[Double]
+  inline given EffectiveType.Ident[Boolean] = EffectiveType.Ident()
+  inline given EffectiveType.Ident[Byte] = EffectiveType.Ident()
+  inline given EffectiveType.Ident[Char] = EffectiveType.Ident()
+  inline given EffectiveType.Ident[Short] = EffectiveType.Ident()
+  inline given EffectiveType.Ident[Int] = EffectiveType.Ident()
+  inline given EffectiveType.Ident[Long] = EffectiveType.Ident()
+  inline given EffectiveType.Ident[Float] = EffectiveType.Ident()
+  inline given EffectiveType.Ident[Double] = EffectiveType.Ident()
 
-  given EffectiveType.Ident[String]
+  inline given EffectiveType.Ident[String] = EffectiveType.Ident()
 
-  given [T] => (et: EffectiveType[T]) => EffectiveType.Aux[Option[T], Option[et.To]] = EffectiveType.apply
-  given [T] => (et: EffectiveType[T]) => EffectiveType.Aux[List[T], List[et.To]] = EffectiveType.apply
+  inline given [T] => (et: EffectiveType[T]) => EffectiveType.Aux[Option[T], Option[et.To]] = EffectiveType()
+  inline given [T] => (et: EffectiveType[T]) => EffectiveType.Aux[List[T], List[et.To]] = EffectiveType()
 end Lang
 
 object Test:
-  trait L1 extends Lang:
-    object Foo extends Lang.Term[(i: Int, j: Int)]
-  end L1
-  object L1 extends L1
+  def main(args: Array[String]): Unit =
+    trait L1 extends Lang:
+      object Foo extends Lang.Term[(i: Int, j: Int)]
 
-  val x = L1.Foo(i = 42, j = 43)
+      object Ping extends Lang.Sum:
+        sealed trait Case extends Lang.Node
 
-  trait L2 extends Lang.Extend[L1]:
-    export up.{
-      Foo as _,
-      *,
-    }
-    object Bar extends Lang.Term[(s: String, opt: Option[up.Foo.T])]
+        object Pong extends Lang.Term[(k: Int, foo: Foo.T)], Case
+      end Ping
+    end L1
+    object L1 extends L1
 
-    given up.Foo.Replace[Bar.type] {}
-  end L2
-  object L2 extends L2
+    val x = L1.Foo(i = 42, j = 43)
+    val ping: L1.Ping.T = L1.Ping.Pong(k = 12, foo = x)
 
-  val y: L2.Bar.T = L2.Bar(s = "hi", opt = Some(L2.Bar("ho", None)))
+    trait L2 extends Lang.Extend[L1]:
+      export up.{
+        Foo as _,
+        *,
+      }
+      object Bar extends Lang.Term[(s: String, opt: Option[up.Foo.T])]
+
+      given r1: up.Foo.ReplaceWith[Bar.type]()
+      given r2: up.Ping.Pong.ReplaceWith[Bar.type]()
+      // given up.Foo.Retract
+    end L2
+    object L2 extends L2
+
+    val y: L2.Bar.T = L2.Bar(s = "hi", opt = Some(L2.Bar("ho", None)))
+    val ping2: L2.Ping.T = y
+  end main
 end Test
