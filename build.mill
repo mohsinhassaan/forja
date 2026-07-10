@@ -21,7 +21,6 @@ trait ForjaModule extends ScalaModule, ScalafixModule:
     "-Xcheck-macros",
     "-explain-cyclic",
     "-preview",
-    "-experimental",
   )
   override def forkArgs = super.forkArgs() ++ Seq(
     // TODO: fix when Scala 3.8?
