@@ -1,12 +1,12 @@
 package forja
 
 import scala.util.NotGiven
-import scala.annotation.publicInBinary
 import scala.deriving.Mirror
 import forja.util.Instanceless
 import forja.util.InlineConversion
-import java.util.Objects
+import scala.annotation.publicInBinary
 import scala.compiletime.asMatchable
+import java.util.Objects
 
 trait Lang:
   final transparent inline given this.type = this
@@ -62,35 +62,43 @@ object Lang:
 
   object Sum:
     sealed trait EffectiveType[C <: Sum#Case] extends Instanceless:
-      type T <: Node#T
+      type T
     end EffectiveType
     object EffectiveType:
-      type Aux[C <: Sum#Case, T0 <: Node#T] = EffectiveType[C] {
+      type Aux[C <: Sum#Case, T0] = EffectiveType[C] {
         type T = T0
       }
 
       inline given inst: [C <: Sum#Case] => (mirror: Mirror.SumOf[C])
         => (tc: TransformedCases[mirror.MirroredElemTypes])
-        => EffectiveType.Aux[C, tc.C] = Instanceless[EffectiveType.Aux[C, tc.C]]
+        => EffectiveType.Aux[C, Tuple.Union[tc.TC]] =
+        Instanceless[EffectiveType.Aux[C, Tuple.Union[tc.TC]]]
     end EffectiveType
 
     sealed trait TransformedCases[Cases <: Tuple] extends Instanceless:
-      type C <: Node#T
+      type TC <: Tuple
     end TransformedCases
     object TransformedCases:
-      type Aux[Cases <: Tuple, C0 <: Node#T] = TransformedCases[Cases] {
-        type C = C0
+      type Aux[Cases <: Tuple, TC0 <: Tuple] = TransformedCases[Cases] {
+        type TC = TC0
       }
 
-      inline def apply[Cases <: Tuple, C <: Node#T](): Aux[Cases, C] =
-        Instanceless[Aux[Cases, C]]
+      inline def apply[Cases <: Tuple, TC <: Tuple](): Aux[Cases, TC] =
+        Instanceless[Aux[Cases, TC]]
 
-      inline given empty: TransformedCases.Aux[EmptyTuple, Nothing] =
+      inline given empty: TransformedCases.Aux[EmptyTuple, EmptyTuple] =
         TransformedCases()
-      inline given cons: [Hd, Tl <: Tuple]
-        => (eht: EffectiveNodeType[Hd & Node]) => (HN: eht.To)
+      inline given cons: [Hd <: Node, Tl <: Tuple]
+        => (Hd: Hd)
+        => (inline ng: NotGiven[Hd.Retract])
+        => (eht: Lang.EffectiveType[Hd.T])
         => (ttl: TransformedCases[Tl])
-        => TransformedCases.Aux[Hd *: Tl, HN.T | ttl.C] = TransformedCases()
+        => TransformedCases.Aux[Hd *: Tl, eht.To *: ttl.TC] = TransformedCases()
+      inline given consRetracted: [Hd <: Node, Tl <: Tuple]
+        => (Hd: Hd)
+        => Hd.Retract
+        => (ttl: TransformedCases[Tl])
+        => TransformedCases.Aux[Hd *: Tl, ttl.TC] = TransformedCases()
     end TransformedCases
   end Sum
 
@@ -224,6 +232,7 @@ object Test:
         sealed trait Case extends Lang.Node
 
         object Pong extends Lang.Term[(k: Int, foo: Foo.T)], Case
+        object Bob extends Lang.Term[(k: Int, foo: Foo.T)], Case
       end Ping
     end L1
     object L1 extends L1
@@ -240,6 +249,7 @@ object Test:
       given r1: up.Foo.ReplaceWith[Bar.type]()
       given r2: up.Ping.Pong.ReplaceWith[Bar.type]()
       // given up.Foo.Retract
+      // given up.Ping.Bob.Retract()
     end L2
     object L2 extends L2
 
@@ -256,6 +266,8 @@ object Test:
     ping2.ex match
       case L2.Bar(s, opt) =>
         println(s"$s, $opt")
+      // case L2.Ping.Bob(s, opt) =>
+      //   println("bob")
     end match
   end main
 end Test
