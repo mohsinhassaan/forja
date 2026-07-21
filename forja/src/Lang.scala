@@ -43,12 +43,15 @@ object Lang:
 
   abstract class Sum extends Node:
     type Case <: Node
+    class HasInner[I <: Sum]
     object Opaque:
       into opaque type T = Any
       extension (t: T)
-        inline def ex(using
+        transparent inline def ex(using
             inline ng: NotGiven[ReplaceWith[?]],
-        )(using et: Sum.EffectiveType[Case]): et.T =
+        )(using et: Sum.EffectiveType[Case])(using
+            ei: Sum.EffectiveInnerType[Sum.this.type],
+        ): et.T | ei.T =
           t.asInstanceOf
         end ex
       end extension
@@ -57,10 +60,31 @@ object Lang:
 
     inline given subtype: [T] => (inline ng: NotGiven[ReplaceWith[?]])
       => (et: Sum.EffectiveType[Case])
-      => InlineConversion.ByCast[et.T, this.T] = InlineConversion.ByCast()
+      => (ei: Sum.EffectiveInnerType[Sum.this.type])
+      => InlineConversion.ByCast[et.T | ei.T, this.T] = InlineConversion.ByCast()
   end Sum
 
   object Sum:
+    sealed trait EffectiveInnerType[S <: Sum] extends Instanceless:
+      type T
+    end EffectiveInnerType
+    object EffectiveInnerType:
+      type Aux[S <: Sum, T0] = EffectiveInnerType[S] { type T = T0 }
+
+      inline given noInner: [S <: Sum] => (S: S)
+        => (inline ng: NotGiven[S.HasInner[?]])
+        => Aux[S, Nothing] =
+        Instanceless[Aux[S, Nothing]]
+
+      inline given hasInner: [S <: Sum, I <: Sum] => (S: S)
+        => S.HasInner[I]
+        => (I: I)
+        => (et: Sum.EffectiveType[I.Case])
+        => (ie: EffectiveInnerType[I])
+        => Aux[S, et.T | ie.T] =
+        Instanceless[Aux[S, et.T | ie.T]]
+    end EffectiveInnerType
+
     sealed trait EffectiveType[C <: Sum#Case] extends Instanceless:
       type T
     end EffectiveType
@@ -269,5 +293,53 @@ object Test:
       // case L2.Ping.Bob(s, opt) =>
       //   println("bob")
     end match
+
+    innerSumTest()
   end main
+
+  def innerSumTest(): Unit =
+    trait L1 extends Lang:
+      object Foo extends Lang.Term[(i: Int, j: Int)]
+
+      object Ping extends Lang.Sum:
+        sealed trait Case extends Lang.Node
+        object Pong extends Lang.Term[(k: Int, foo: Foo.T)], Case
+        object Bob extends Lang.Term[(k: Int, foo: Foo.T)], Case
+      end Ping
+    end L1
+    object L1 extends L1
+
+    trait L2 extends Lang.Extend[L1]:
+      export up.{Foo as _, Ping as _, *}
+      object Bar extends Lang.Term[(s: String, opt: Option[up.Foo.T])]
+      object Ping extends Lang.Sum:
+        given HasInner[up.Ping.type]()
+        export up.Ping.{Case as _, Opaque as _, *}
+        sealed trait Case extends Lang.Node
+        object NewCase extends Lang.Term[(s: String, opt: Option[up.Foo.T])], Case
+      end Ping
+
+      given up.Foo.ReplaceWith[Bar.type]()
+      given up.Ping.ReplaceWith[Ping.type]()
+    end L2
+    object L2 extends L2
+
+    val nc: L2.Ping.T = L2.Ping.NewCase(s = "hello", opt = None)
+    println(nc)
+
+    val pong: L2.Ping.T = L2.Ping.Pong(k = 12, foo = L2.Bar(s = "x", opt = None))
+    println(pong)
+
+    nc.ex match
+      case L2.Ping.NewCase(s, opt) => println(s"NewCase: $s")
+      case L2.Ping.Pong(k, foo)   => println(s"Pong: $k")
+      case L2.Ping.Bob(k, foo)    => println(s"Bob: $k")
+    end match
+
+    pong.ex match
+      case L2.Ping.NewCase(s, opt) => println(s"NewCase: $s")
+      case L2.Ping.Pong(k, foo)   => println(s"Pong: $k")
+      case L2.Ping.Bob(k, foo)    => println(s"Bob: $k")
+    end match
+  end innerSumTest
 end Test
