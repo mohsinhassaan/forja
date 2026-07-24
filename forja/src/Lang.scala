@@ -76,7 +76,9 @@ object Lang:
         type T = T0
       }
 
-      inline given inst: [S <: Sum] => (list: EffectiveTypeList[S]) => (proj: EffectiveTypeProjection[list.Cases]) => Aux[S, Tuple.Union[proj.T]] =
+      inline given inst: [S <: Sum] => (list: EffectiveTypeList[S])
+        => (proj: EffectiveTypeProjection[list.Cases])
+        => Aux[S, Tuple.Union[proj.T]] =
         Instanceless[Aux[S, Tuple.Union[proj.T]]]
       end inst
 
@@ -90,12 +92,15 @@ object Lang:
         }
 
         object Aux:
-          inline def apply[Tpl <: Tuple, T <: Tuple](): Aux[Tpl, T] = Instanceless[Aux[Tpl, T]]
+          inline def apply[Tpl <: Tuple, T <: Tuple](): Aux[Tpl, T] =
+            Instanceless[Aux[Tpl, T]]
         end Aux
 
         inline given empty: Aux[EmptyTuple, EmptyTuple] = Aux()
 
-        inline given cons: [Hd <: Node, Tl <: Tuple] => (Hd: Hd) => (rec: EffectiveTypeProjection[Tl]) => Aux[Hd *: Tl, Hd.T *: rec.T] = Aux()
+        inline given cons: [Hd <: Node, Tl <: Tuple] => (Hd: Hd)
+          => (rec: EffectiveTypeProjection[Tl])
+          => Aux[Hd *: Tl, Hd.T *: rec.T] = Aux()
       end EffectiveTypeProjection
     end EffectiveType
 
@@ -107,13 +112,20 @@ object Lang:
       type Aux[S <: Sum, Cases0 <: Tuple] = EffectiveTypeList[S] {
         type Cases = Cases0
       }
-      inline def apply[S <: Sum, Cases <: Tuple](): Aux[S, Cases] = Instanceless[Aux[S, Cases]]
+      inline def apply[S <: Sum, Cases <: Tuple](): Aux[S, Cases] =
+        Instanceless[Aux[S, Cases]]
 
-      inline given instBase: [S <: Sum] => NotGiven[S <:< Sum#Extends] => (S: S) => (mirror: Mirror.SumOf[S.Case]) => (tc: TransformedCases[mirror.MirroredElemTypes]) => EffectiveTypeList.Aux[S, tc.TC] =
+      inline given instBase: [S <: Sum] => NotGiven[S <:< Sum#Extends] => (S: S)
+        => (mirror: Mirror.SumOf[S.Case])
+        => (tc: TransformedCases[mirror.MirroredElemTypes])
+        => EffectiveTypeList.Aux[S, tc.TC] =
         EffectiveTypeList()
       end instBase
 
-      inline given instExtends: [S <: Sum#Extends] => (S: S) => (rec: EffectiveTypeList[S.Super]) => (mirror: Mirror.SumOf[S.Case]) => (tc: TransformedCases[mirror.MirroredElemTypes]) => EffectiveTypeList.Aux[S, Tuple.Concat[rec.Cases, tc.TC]] =
+      inline given instExtends: [S <: Sum#Extends] => (S: S)
+        => (rec: EffectiveTypeList[S.Super]) => (mirror: Mirror.SumOf[S.Case])
+        => (tc: TransformedCases[mirror.MirroredElemTypes])
+        => EffectiveTypeList.Aux[S, Tuple.Concat[rec.Cases, tc.TC]] =
         EffectiveTypeList()
       end instExtends
     end EffectiveTypeList
@@ -139,7 +151,7 @@ object Lang:
         => (eht: Lang.EffectiveNodeType[Hd])
         => (ttl: TransformedCases[Tl])
         => TransformedCases.Aux[Hd *: Tl, eht.To *: ttl.TC] =
-          TransformedCases()
+        TransformedCases()
       end cons
 
       inline given consRetracted: [Hd <: Node, Tl <: Tuple]
@@ -147,7 +159,7 @@ object Lang:
         => Hd.Retract
         => (ttl: TransformedCases[Tl])
         => TransformedCases.Aux[Hd *: Tl, ttl.TC] =
-          TransformedCases()
+        TransformedCases()
       end consRetracted
     end TransformedCases
   end Sum
@@ -347,7 +359,9 @@ object Test:
         sealed trait Case extends Lang.Node
         object Case:
           export up.Ping.Case.*
-          object NewCase extends Lang.Term[(s: String, opt: Option[up.Foo.T])], Case
+          object NewCase
+              extends Lang.Term[(s: String, opt: Option[up.Foo.T])],
+                Case
         export Case.*
       end Ping
 
@@ -359,19 +373,20 @@ object Test:
     val nc: L2.Ping.T = L2.Ping.NewCase(s = "hello", opt = None)
     println(nc)
 
-    val pong: L2.Ping.T = L2.Ping.Pong(k = 12, foo = L2.Bar(s = "x", opt = None))
+    val pong: L2.Ping.T =
+      L2.Ping.Pong(k = 12, foo = L2.Bar(s = "x", opt = None))
     println(pong)
 
     nc.ex match
       case L2.Ping.NewCase(s, opt) => println(s"NewCase: $s")
-      case L2.Ping.Pong(k, foo)   => println(s"Pong: $k")
-      case L2.Ping.Bob(k, foo)    => println(s"Bob: $k")
+      case L2.Ping.Pong(k, foo)    => println(s"Pong: $k")
+      case L2.Ping.Bob(k, foo)     => println(s"Bob: $k")
     end match
 
     pong.ex match
       case L2.Ping.NewCase(s, opt) => println(s"NewCase: $s")
-      case L2.Ping.Pong(k, foo)   => println(s"Pong: $k")
-      case L2.Ping.Bob(k, foo)    => println(s"Bob: $k")
+      case L2.Ping.Pong(k, foo)    => println(s"Pong: $k")
+      case L2.Ping.Bob(k, foo)     => println(s"Bob: $k")
     end match
   end innerSumTest
 end Test
