@@ -42,66 +42,86 @@ object Lang:
   end Node
 
   abstract class Sum extends Node:
+    sum =>
     type Case <: Node
-    class HasInner[I <: Sum]
     object Opaque:
       into opaque type T = Any
       extension (t: T)
         transparent inline def ex(using
             inline ng: NotGiven[ReplaceWith[?]],
-        )(using et: Sum.EffectiveType[Case])(using
-            ei: Sum.EffectiveInnerType[Sum.this.type],
-        ): et.T | ei.T =
-          t.asInstanceOf
+        )(using et: Sum.EffectiveType[Sum.this.type]): et.T =
+          // because it will claim unexhaustive no matter what as of writing :(
+          t.asInstanceOf.runtimeChecked
         end ex
       end extension
     end Opaque
     override type T = Opaque.T
 
-    inline given subtype: [T] => (inline ng: NotGiven[ReplaceWith[?]])
-      => (et: Sum.EffectiveType[Case])
-      => (ei: Sum.EffectiveInnerType[Sum.this.type])
-      => InlineConversion.ByCast[et.T | ei.T, this.T] = InlineConversion.ByCast()
+    inline given subtype: (inline ng: NotGiven[ReplaceWith[?]])
+      => (et: Sum.EffectiveType[Sum.this.type])
+      => InlineConversion.ByCast[et.T, Sum.this.T] = InlineConversion.ByCast()
+
+    abstract class Extends extends Sum, Selectable:
+      final type Super = sum.type
+    end Extends
   end Sum
 
   object Sum:
-    sealed trait EffectiveInnerType[S <: Sum] extends Instanceless:
-      type T
-    end EffectiveInnerType
-    object EffectiveInnerType:
-      type Aux[S <: Sum, T0] = EffectiveInnerType[S] { type T = T0 }
-
-      inline given noInner: [S <: Sum] => (S: S)
-        => (inline ng: NotGiven[S.HasInner[?]])
-        => Aux[S, Nothing] =
-        Instanceless[Aux[S, Nothing]]
-
-      inline given hasInner: [S <: Sum, I <: Sum] => (S: S)
-        => S.HasInner[I]
-        => (I: I)
-        => (et: Sum.EffectiveType[I.Case])
-        => (ie: EffectiveInnerType[I])
-        => Aux[S, et.T | ie.T] =
-        Instanceless[Aux[S, et.T | ie.T]]
-    end EffectiveInnerType
-
-    sealed trait EffectiveType[C <: Sum#Case] extends Instanceless:
+    sealed trait EffectiveType[S <: Sum] extends Instanceless:
       type T
     end EffectiveType
+
     object EffectiveType:
-      type Aux[C <: Sum#Case, T0] = EffectiveType[C] {
+      type Aux[S <: Sum, T0] = EffectiveType[S] {
         type T = T0
       }
 
-      inline given inst: [C <: Sum#Case] => (mirror: Mirror.SumOf[C])
-        => (tc: TransformedCases[mirror.MirroredElemTypes])
-        => EffectiveType.Aux[C, Tuple.Union[tc.TC]] =
-        Instanceless[EffectiveType.Aux[C, Tuple.Union[tc.TC]]]
+      inline given inst: [S <: Sum] => (list: EffectiveTypeList[S]) => (proj: EffectiveTypeProjection[list.Cases]) => Aux[S, Tuple.Union[proj.T]] =
+        Instanceless[Aux[S, Tuple.Union[proj.T]]]
+      end inst
+
+      sealed trait EffectiveTypeProjection[Tpl <: Tuple]:
+        type T <: Tuple
+      end EffectiveTypeProjection
+
+      object EffectiveTypeProjection:
+        type Aux[Tpl <: Tuple, T0 <: Tuple] = EffectiveTypeProjection[Tpl] {
+          type T = T0
+        }
+
+        object Aux:
+          inline def apply[Tpl <: Tuple, T <: Tuple](): Aux[Tpl, T] = Instanceless[Aux[Tpl, T]]
+        end Aux
+
+        inline given empty: Aux[EmptyTuple, EmptyTuple] = Aux()
+
+        inline given cons: [Hd <: Node, Tl <: Tuple] => (Hd: Hd) => (rec: EffectiveTypeProjection[Tl]) => Aux[Hd *: Tl, Hd.T *: rec.T] = Aux()
+      end EffectiveTypeProjection
     end EffectiveType
+
+    sealed trait EffectiveTypeList[S <: Sum] extends Instanceless:
+      type Cases <: Tuple
+    end EffectiveTypeList
+
+    object EffectiveTypeList:
+      type Aux[S <: Sum, Cases0 <: Tuple] = EffectiveTypeList[S] {
+        type Cases = Cases0
+      }
+      inline def apply[S <: Sum, Cases <: Tuple](): Aux[S, Cases] = Instanceless[Aux[S, Cases]]
+
+      inline given instBase: [S <: Sum] => NotGiven[S <:< Sum#Extends] => (S: S) => (mirror: Mirror.SumOf[S.Case]) => (tc: TransformedCases[mirror.MirroredElemTypes]) => EffectiveTypeList.Aux[S, tc.TC] =
+        EffectiveTypeList()
+      end instBase
+
+      inline given instExtends: [S <: Sum#Extends] => (S: S) => (rec: EffectiveTypeList[S.Super]) => (mirror: Mirror.SumOf[S.Case]) => (tc: TransformedCases[mirror.MirroredElemTypes]) => EffectiveTypeList.Aux[S, Tuple.Concat[rec.Cases, tc.TC]] =
+        EffectiveTypeList()
+      end instExtends
+    end EffectiveTypeList
 
     sealed trait TransformedCases[Cases <: Tuple] extends Instanceless:
       type TC <: Tuple
     end TransformedCases
+
     object TransformedCases:
       type Aux[Cases <: Tuple, TC0 <: Tuple] = TransformedCases[Cases] {
         type TC = TC0
@@ -112,17 +132,23 @@ object Lang:
 
       inline given empty: TransformedCases.Aux[EmptyTuple, EmptyTuple] =
         TransformedCases()
+
       inline given cons: [Hd <: Node, Tl <: Tuple]
         => (Hd: Hd)
         => (inline ng: NotGiven[Hd.Retract])
-        => (eht: Lang.EffectiveType[Hd.T])
+        => (eht: Lang.EffectiveNodeType[Hd])
         => (ttl: TransformedCases[Tl])
-        => TransformedCases.Aux[Hd *: Tl, eht.To *: ttl.TC] = TransformedCases()
+        => TransformedCases.Aux[Hd *: Tl, eht.To *: ttl.TC] =
+          TransformedCases()
+      end cons
+
       inline given consRetracted: [Hd <: Node, Tl <: Tuple]
         => (Hd: Hd)
         => Hd.Retract
         => (ttl: TransformedCases[Tl])
-        => TransformedCases.Aux[Hd *: Tl, ttl.TC] = TransformedCases()
+        => TransformedCases.Aux[Hd *: Tl, ttl.TC] =
+          TransformedCases()
+      end consRetracted
     end TransformedCases
   end Sum
 
@@ -161,6 +187,7 @@ object Lang:
   sealed trait EffectiveNodeType[From <: Node] extends Instanceless:
     type To <: Node
   end EffectiveNodeType
+
   object EffectiveNodeType:
     type Aux[From <: Node, To0 <: Node] = EffectiveNodeType[From] {
       type To = To0
@@ -182,6 +209,7 @@ object Lang:
   sealed trait EffectiveType[From] extends Instanceless:
     type To
   end EffectiveType
+
   object EffectiveType:
     type Aux[From, To0] = EffectiveType[From] {
       type To = To0
@@ -207,6 +235,7 @@ object Lang:
   trait EffectiveTupleType[From <: Tuple]:
     type To <: Tuple
   end EffectiveTupleType
+
   object EffectiveTupleType:
     type Aux[From <: Tuple, To0 <: Tuple] = EffectiveTupleType[From] {
       type To = To0
@@ -303,8 +332,10 @@ object Test:
 
       object Ping extends Lang.Sum:
         sealed trait Case extends Lang.Node
-        object Pong extends Lang.Term[(k: Int, foo: Foo.T)], Case
-        object Bob extends Lang.Term[(k: Int, foo: Foo.T)], Case
+        object Case:
+          object Pong extends Lang.Term[(k: Int, foo: Foo.T)], Case
+          object Bob extends Lang.Term[(k: Int, foo: Foo.T)], Case
+        export Case.*
       end Ping
     end L1
     object L1 extends L1
@@ -312,11 +343,12 @@ object Test:
     trait L2 extends Lang.Extend[L1]:
       export up.{Foo as _, Ping as _, *}
       object Bar extends Lang.Term[(s: String, opt: Option[up.Foo.T])]
-      object Ping extends Lang.Sum:
-        given HasInner[up.Ping.type]()
-        export up.Ping.{Case as _, Opaque as _, *}
+      object Ping extends up.Ping.Extends:
         sealed trait Case extends Lang.Node
-        object NewCase extends Lang.Term[(s: String, opt: Option[up.Foo.T])], Case
+        object Case:
+          export up.Ping.Case.*
+          object NewCase extends Lang.Term[(s: String, opt: Option[up.Foo.T])], Case
+        export Case.*
       end Ping
 
       given up.Foo.ReplaceWith[Bar.type]()
