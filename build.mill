@@ -22,6 +22,7 @@ trait ForjaModule extends ScalaModule, ScalafixModule:
     "-explain-cyclic",
     "-Wunused:imports",
     "-preview",
+    "-language:experimental.erasedDefinitions",
   )
   override def forkArgs = super.forkArgs() ++ Seq(
     // TODO: fix when Scala 3.8?
