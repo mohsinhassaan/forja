@@ -17,40 +17,40 @@ object Lang:
   trait Extend[Base <: Lang](using val up: Base) extends Lang
 
   sealed abstract class NodeT[N <: Node] extends Erased:
-    type T <: Node#T
+    type T
   end NodeT
 
   object NodeT:
-    final class Launder[N <: Node, T <: Node#T]
+    final class Launder[N <: Node, T]
     object Launder:
       given instance: [N <: Node] => (N: N) => Launder[N, N.T] =
         new Launder
       end instance
     end Launder
 
-    final class Aux[N <: Node, T0 <: Node#T] extends NodeT[N]:
+    final class Aux[N <: Node, T0] extends NodeT[N]:
       type T = T0
     end Aux
 
     inline given instance
-        : [N <: Node, T <: Node#T] => (inline ev: Launder[N, T]) => Aux[N, T] =
+        : [N <: Node, T] => (inline ev: Launder[N, T]) => Aux[N, T] =
       new Aux
     end instance
   end NodeT
 
-  sealed abstract class TNode[T <: Node#T] extends Erased:
+  sealed abstract class TNode[T] extends Erased:
     type N <: Node
   end TNode
 
   object TNode:
-    final class Launder[N <: Node, T <: Node#T]
+    final class Launder[N <: Node, T]
 
-    final class Aux[N0 <: Node, T <: Node#T] extends TNode[T]:
+    final class Aux[N0 <: Node, T] extends TNode[T]:
       type N = N0
     end Aux
 
     inline given instance
-        : [N <: Node, T <: Node#T] => (inline ev: Launder[N, T]) => Aux[N, T] =
+        : [N <: Node, T] => (inline ev: Launder[N, T]) => Aux[N, T] =
       new Aux
     end instance
   end TNode
@@ -98,7 +98,7 @@ object Lang:
   abstract class Node:
     final transparent inline given this.type = this
     class ReplaceWith[OtherNode <: Node]
-    class Retract extends ReplaceWith[Node.Empty.type]
+    open class Retract extends ReplaceWith[Node.Empty.type]
 
     type T
 
@@ -129,12 +129,13 @@ object Lang:
 
     abstract class Extends extends Sum, Selectable:
       final type Super = sum.type
+      final inline given InlineConversion.ByCast[T, sum.T] = new InlineConversion.ByCast
     end Extends
   end Sum
 
   object Sum:
     // Intentionally over-broad conversion so we see error messages from the summons inside it, not the generic inapplicable conversion message (that is, act like there is no conversion)
-    inline given subtypeConversionPoint: [T <: Node#T, U <: Node#T, ET]
+    inline given subtypeConversionPoint: [T, U, ET]
       => (inline ng: NotGiven[T =:= U]) => (tn: TNode[T]) => (un: TNode[U])
       => (unet: EffectiveType[un.N]) => (unet.T =:= ET)
       => InlineConversion.ByCast[T, U] =
@@ -246,6 +247,14 @@ object Lang:
         => Aux[S, Tuple.Concat[rec.Cases, tc.TC]] =
         new Aux
       end instExtends
+
+      inline given instExtendsEmpty: [S <: Sum#Extends]
+        => (inline ng: NotGiven[SMirror[S]])
+        => (S: SSuper[S])
+        => (rec: EffectiveTypeList[S.Super])
+        => Aux[S, rec.Cases] =
+        new Aux
+      end instExtendsEmpty
     end EffectiveTypeList
 
     sealed abstract class TransformedCases[Cases <: Tuple] extends Erased:
@@ -279,9 +288,11 @@ object Lang:
 
   abstract class Term[Members <: NamedTuple.AnyNamedTuple] extends Node:
     self: Singleton =>
-    final class T @publicInBinary private[Term] (
-        private[Term] val members: Tuple,
+    type MembersType = Members
+    final class T @publicInBinary private[Lang] (
+        private[Lang] val members: Tuple,
     ):
+      private[Lang] val _outer: AnyRef = self.asInstanceOf[AnyRef]
       override def toString(): String = s"${self.getClass().getName()}$members"
       override def equals(obj: Any): Boolean =
         obj.asMatchable match
@@ -292,6 +303,9 @@ object Lang:
         Objects.hash(self, members)
       end hashCode
     end T
+
+    private[Lang] def isMyT(v: Any): Boolean =
+      v.isInstanceOf[T] && v.asInstanceOf[T]._outer.eq(self.asInstanceOf[AnyRef])
 
     inline def apply(using
         inline ng: NotGiven[ReplaceWith[?]],
@@ -340,7 +354,7 @@ object Lang:
   end EffectiveType
 
   inline given effectiveNode
-      : [T <: Node#T] => (tn: TNode[T]) => (ent: EffectiveNodeType[tn.N])
+      : [T] => (tn: TNode[T]) => (ent: EffectiveNodeType[tn.N])
         => (N2: NodeT[ent.To]) => EffectiveType.Aux[T, N2.T] =
     new EffectiveType.Aux
 
@@ -379,11 +393,215 @@ object Lang:
   inline given EffectiveType.Ident[Double] = new EffectiveType.Ident
 
   inline given EffectiveType.Ident[String] = new EffectiveType.Ident
+  inline given EffectiveType.Ident[Unit] = new EffectiveType.Ident
 
   inline given [T] => (et: EffectiveType[T])
     => EffectiveType.Aux[Option[T], Option[et.To]] = new EffectiveType.Aux
   inline given [T] => (et: EffectiveType[T])
     => EffectiveType.Aux[List[T], List[et.To]] = new EffectiveType.Aux
+
+  // transform
+
+  abstract class Rewrite[From, To]:
+    def rewrite(t: From): To
+  end Rewrite
+
+  sealed abstract class TermMembers[N <: Term[?]] extends Erased:
+    type Members <: NamedTuple.AnyNamedTuple
+  end TermMembers
+
+  object TermMembers:
+    final class Aux[N <: Term[?], M <: NamedTuple.AnyNamedTuple]
+        extends TermMembers[N]:
+      type Members = M
+    end Aux
+
+    final class Launder[N <: Term[?], M <: NamedTuple.AnyNamedTuple]
+
+    object Launder:
+      given instance: [N <: Term[?]] => (N: N) => Launder[N, N.MembersType] =
+        new Launder
+    end Launder
+
+    inline given instance: [N <: Term[?], M <: NamedTuple.AnyNamedTuple]
+      => (inline ev: Launder[N, M]) => Aux[N, M] =
+      new Aux
+  end TermMembers
+
+  abstract class NodeClassTag[N <: Node]:
+    def isInstance(v: Any): Boolean
+  end NodeClassTag
+
+  object NodeClassTag:
+    final class Launder[N <: Node](val node: N)
+
+    object Launder:
+      given instance: [N <: Node] => (N: N) => Launder[N] =
+        new Launder(N)
+    end Launder
+
+    given forTerm: [N <: Term[?]] => (ev: Launder[N])
+      => NodeClassTag[N] =
+      val n = ev.node
+      new NodeClassTag[N]:
+        def isInstance(v: Any): Boolean = n.isMyT(v)
+  end NodeClassTag
+
+  abstract class OptionalRewrite[T]:
+    def applyIfPresent(t: Any): Any
+  end OptionalRewrite
+
+  object OptionalRewrite:
+    given withRewrite: [T] => (rw: Rewrite[T, ?]) => OptionalRewrite[T] =
+      new OptionalRewrite[T]:
+        def applyIfPresent(t: Any): Any = rw.rewrite(t.asInstanceOf[T])
+
+    given withoutRewrite: [T] => (ng: NotGiven[Rewrite[T, ?]])
+      => OptionalRewrite[T] =
+      new OptionalRewrite[T]:
+        def applyIfPresent(t: Any): Any = t
+  end OptionalRewrite
+
+  abstract class SumOptionalRewrite[S <: Sum]:
+    def applyOr(t: Any, fallback: () => Any): Any
+  end SumOptionalRewrite
+
+  object SumOptionalRewrite:
+    final class Launder[S <: Sum](val rw: Any => Any)
+
+    object Launder:
+      given withRewrite: [S <: Sum] => (S: S) => (rw: Rewrite[S.T, ?])
+        => Launder[S] =
+        new Launder(t => rw.rewrite(t.asInstanceOf[S.T]).asInstanceOf[Any])
+    end Launder
+
+    given withRewrite: [S <: Sum] => (ev: Launder[S])
+      => SumOptionalRewrite[S] =
+      val f = ev.rw
+      new SumOptionalRewrite[S]:
+        def applyOr(t: Any, fallback: () => Any): Any = f(t)
+
+    given withoutRewrite: [S <: Sum] => (ng: NotGiven[Launder[S]])
+      => SumOptionalRewrite[S] =
+      new SumOptionalRewrite[S]:
+        def applyOr(t: Any, fallback: () => Any): Any = fallback()
+  end SumOptionalRewrite
+
+  abstract class TransformField[T]:
+    def transformField(t: T): T
+  end TransformField
+
+  object TransformField:
+    given TransformField[Boolean]:
+      def transformField(t: Boolean): Boolean = t
+    given TransformField[Byte]:
+      def transformField(t: Byte): Byte = t
+    given TransformField[Char]:
+      def transformField(t: Char): Char = t
+    given TransformField[Short]:
+      def transformField(t: Short): Short = t
+    given TransformField[Int]:
+      def transformField(t: Int): Int = t
+    given TransformField[Long]:
+      def transformField(t: Long): Long = t
+    given TransformField[Float]:
+      def transformField(t: Float): Float = t
+    given TransformField[Double]:
+      def transformField(t: Double): Double = t
+    given TransformField[String]:
+      def transformField(t: String): String = t
+    given TransformField[Unit]:
+      def transformField(t: Unit): Unit = t
+
+    given nodeField
+        : [T] => (tn: TNode[T]) => (ent: EffectiveNodeType[tn.N])
+          => (xform: => Transform[ent.To, ?]) => TransformField[T] =
+      new TransformField[T]:
+        def transformField(t: T): T =
+          xform.transformAny(t.asInstanceOf[Any]).asInstanceOf[T]
+
+    given optionField
+        : [T] => (inner: TransformField[T]) => TransformField[Option[T]] =
+      new TransformField[Option[T]]:
+        def transformField(t: Option[T]): Option[T] =
+          t.map(inner.transformField)
+
+    given listField
+        : [T] => (inner: TransformField[T]) => TransformField[List[T]] =
+      new TransformField[List[T]]:
+        def transformField(t: List[T]): List[T] =
+          t.map(inner.transformField)
+  end TransformField
+
+  abstract class TransformTuple[Tpl <: Tuple]:
+    def transformTuple(t: Tuple): Tuple
+  end TransformTuple
+
+  object TransformTuple:
+    given empty: TransformTuple[EmptyTuple]:
+      def transformTuple(t: Tuple): Tuple = EmptyTuple
+
+    given cons
+        : [Hd, Tl <: Tuple] => (hd: TransformField[Hd])
+          => (tl: => TransformTuple[Tl]) => TransformTuple[Hd *: Tl] =
+      new TransformTuple[Hd *: Tl]:
+        def transformTuple(t: Tuple): Tuple =
+          val net = t.asInstanceOf[NonEmptyTuple]
+          hd.transformField(net.head.asInstanceOf[Hd]) *: tl.transformTuple(
+            net.tail,
+          )
+  end TransformTuple
+
+  abstract class SumCaseDispatch[S <: Sum, Cases <: Tuple]:
+    def dispatch(t: Any): Any
+  end SumCaseDispatch
+
+  object SumCaseDispatch:
+    given empty: [S <: Sum] => SumCaseDispatch[S, EmptyTuple] =
+      new SumCaseDispatch[S, EmptyTuple]:
+        def dispatch(t: Any): Any = throw MatchError(t)
+
+    given cons
+        : [S <: Sum, Hd <: Node, Tl <: Tuple] => (tag: NodeClassTag[Hd])
+          => (xform: => Transform[Hd, ?]) => (rest: => SumCaseDispatch[S, Tl])
+          => SumCaseDispatch[S, Hd *: Tl] =
+      new SumCaseDispatch[S, Hd *: Tl]:
+        def dispatch(t: Any): Any =
+          if tag.isInstance(t) then xform.transformAny(t)
+          else rest.dispatch(t)
+  end SumCaseDispatch
+
+  abstract class Transform[From <: Node, To <: Node]:
+    private[Lang] def transformAny(t: Any): Any
+  end Transform
+
+  object Transform:
+    extension [From <: Node, To <: Node](self: Transform[From, To])
+      inline def transform[FT, TT](using NodeT.Aux[From, FT], NodeT.Aux[To, TT])(t: FT): TT =
+        self.transformAny(t).asInstanceOf[TT]
+
+    given forTerm
+        : [N <: Term[?], To <: Node] => (N: N)
+          => (tm: TermMembers[N])
+          => (tt: TransformTuple[NamedTuple.DropNames[tm.Members]])
+          => (nt: NodeT[N]) => (rw: OptionalRewrite[nt.T])
+          => Transform[N, To] =
+      new Transform[N, To]:
+        private[Lang] def transformAny(t: Any): Any =
+          val raw = t.asInstanceOf[N.T]
+          val transformed = tt.transformTuple(raw.members)
+          val result = new N.T(transformed)
+          rw.applyIfPresent(result)
+
+    given forSum
+        : [S <: Sum, To <: Node] => (etl: Sum.EffectiveTypeList[S])
+          => (dispatch: SumCaseDispatch[S, etl.Cases])
+          => (rw: SumOptionalRewrite[S])
+          => Transform[S, To] =
+      new Transform[S, To]:
+        private[Lang] def transformAny(t: Any): Any =
+          rw.applyOr(t, () => dispatch.dispatch(t))
+  end Transform
 end Lang
 
 object Test:
