@@ -130,7 +130,8 @@ object Lang:
 
     abstract class Extends extends Sum, Selectable:
       final type Super = sum.type
-      final inline given InlineConversion.ByCast[T, sum.T] = new InlineConversion.ByCast
+      final inline given InlineConversion.ByCast[T, sum.T] =
+        new InlineConversion.ByCast
     end Extends
   end Sum
 
@@ -306,7 +307,10 @@ object Lang:
     end T
 
     private[Lang] def isMyT(v: Any): Boolean =
-      v.isInstanceOf[T] && v.asInstanceOf[T]._outer.eq(self.asInstanceOf[AnyRef])
+      v.isInstanceOf[T] && v
+        .asInstanceOf[T]
+        ._outer
+        .eq(self.asInstanceOf[AnyRef])
 
     inline def apply(using
         inline ng: NotGiven[ReplaceWith[?]],
@@ -514,9 +518,8 @@ object Lang:
     given TransformField[Unit]:
       def transformField(t: Unit): Unit = t
 
-    given nodeField
-        : [T] => (tn: TNode[T]) => (ent: EffectiveNodeType[tn.N])
-          => (xform: => Transform[ent.To, ?]) => TransformField[T] =
+    given nodeField: [T] => (tn: TNode[T]) => (ent: EffectiveNodeType[tn.N])
+      => (xform: => Transform[ent.To, ?]) => TransformField[T] =
       new TransformField[T]:
         def transformField(t: T): T =
           xform.transformAny(t.asInstanceOf[Any]).asInstanceOf[T]
@@ -542,9 +545,8 @@ object Lang:
     given empty: TransformTuple[EmptyTuple]:
       def transformTuple(t: Tuple): Tuple = EmptyTuple
 
-    given cons
-        : [Hd, Tl <: Tuple] => (hd: TransformField[Hd])
-          => (tl: => TransformTuple[Tl]) => TransformTuple[Hd *: Tl] =
+    given cons: [Hd, Tl <: Tuple] => (hd: TransformField[Hd])
+      => (tl: => TransformTuple[Tl]) => TransformTuple[Hd *: Tl] =
       new TransformTuple[Hd *: Tl]:
         def transformTuple(t: Tuple): Tuple =
           val net = t.asInstanceOf[NonEmptyTuple]
@@ -562,10 +564,9 @@ object Lang:
       new SumCaseDispatch[S, EmptyTuple]:
         def dispatch(t: Any): Any = throw MatchError(t)
 
-    given cons
-        : [S <: Sum, Hd <: Node, Tl <: Tuple] => (tag: NodeClassTag[Hd])
-          => (xform: => Transform[Hd, ?]) => (rest: => SumCaseDispatch[S, Tl])
-          => SumCaseDispatch[S, Hd *: Tl] =
+    given cons: [S <: Sum, Hd <: Node, Tl <: Tuple] => (tag: NodeClassTag[Hd])
+      => (xform: => Transform[Hd, ?]) => (rest: => SumCaseDispatch[S, Tl])
+      => SumCaseDispatch[S, Hd *: Tl] =
       new SumCaseDispatch[S, Hd *: Tl]:
         def dispatch(t: Any): Any =
           if tag.isInstance(t) then xform.transformAny(t)
@@ -578,15 +579,17 @@ object Lang:
 
   object Transform:
     extension [From <: Node, To <: Node](self: Transform[From, To])
-      inline def transform[FT, TT](using NodeT.Aux[From, FT], NodeT.Aux[To, TT])(t: FT): TT =
+      inline def transform[FT, TT](using
+          NodeT.Aux[From, FT],
+          NodeT.Aux[To, TT],
+      )(t: FT): TT =
         self.transformAny(t).asInstanceOf[TT]
 
-    given forTerm
-        : [N <: Term[?], To <: Node] => (N: N)
-          => (tm: TermMembers[N])
-          => (tt: TransformTuple[NamedTuple.DropNames[tm.Members]])
-          => (nt: NodeT[N]) => (rw: OptionalRewrite[nt.T])
-          => Transform[N, To] =
+    given forTerm: [N <: Term[?], To <: Node] => (N: N)
+      => (tm: TermMembers[N])
+      => (tt: TransformTuple[NamedTuple.DropNames[tm.Members]])
+      => (nt: NodeT[N]) => (rw: OptionalRewrite[nt.T])
+      => Transform[N, To] =
       new Transform[N, To]:
         private[Lang] def transformAny(t: Any): Any =
           val raw = t.asInstanceOf[N.T]
@@ -594,11 +597,10 @@ object Lang:
           val result = new N.T(transformed)
           rw.applyIfPresent(result)
 
-    given forSum
-        : [S <: Sum, To <: Node] => (etl: Sum.EffectiveTypeList[S])
-          => (dispatch: SumCaseDispatch[S, etl.Cases])
-          => (rw: SumOptionalRewrite[S])
-          => Transform[S, To] =
+    given forSum: [S <: Sum, To <: Node] => (etl: Sum.EffectiveTypeList[S])
+      => (dispatch: SumCaseDispatch[S, etl.Cases])
+      => (rw: SumOptionalRewrite[S])
+      => Transform[S, To] =
       new Transform[S, To]:
         private[Lang] def transformAny(t: Any): Any =
           rw.applyOr(t, () => dispatch.dispatch(t))

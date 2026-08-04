@@ -26,8 +26,9 @@ end AddLang
 object AddLang extends AddLang
 
 object CalcXform:
-  given (xform: => Lang.Transform[SubLang.Expr.type, AddLang.Expr.type])
-    => Lang.Rewrite[SubLang.Expr.Sub.T, AddLang.Expr.T]:
+  given (
+      xform: => Lang.Transform[SubLang.Expr.type, AddLang.Expr.type],
+  ) => Lang.Rewrite[SubLang.Expr.Sub.T, AddLang.Expr.T]:
     def rewrite(t: SubLang.Expr.Sub.T): AddLang.Expr.T =
       val SubLang.Expr.Sub((l, r)) = t.runtimeChecked
       AddLang.Expr.Add(
@@ -38,13 +39,17 @@ object CalcXform:
         ),
       )
 
-  private val xform = summon[Lang.Transform[SubLang.Expr.type, AddLang.Expr.type]]
+  private val xform =
+    summon[Lang.Transform[SubLang.Expr.type, AddLang.Expr.type]]
 
   def transform(expr: SubLang.Expr.T): AddLang.Expr.T =
     xform.transform(expr)
 
   def main(args: Array[String]): Unit =
-    val e1 = SubLang.Expr.Sub(lhs = SubLang.Expr.Triv((value = SubLang.Num((n = 2)))), rhs = SubLang.Expr.Triv((value = SubLang.Num((n = 3)))))
+    val e1 = SubLang.Expr.Sub(
+      lhs = SubLang.Expr.Triv((value = SubLang.Num((n = 2)))),
+      rhs = SubLang.Expr.Triv((value = SubLang.Num((n = 3)))),
+    )
     println(e1)
     println(transform(e1))
   end main

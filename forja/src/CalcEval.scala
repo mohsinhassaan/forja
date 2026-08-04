@@ -18,8 +18,9 @@ end Val
 object Val extends Val
 
 object CalcEval:
-  given (xform: => Lang.Transform[Calc.Expr.type, Val.Num.type])
-    => Lang.Rewrite[Calc.Expr.T, Val.Num.T]:
+  given (
+      xform: => Lang.Transform[Calc.Expr.type, Val.Num.type],
+  ) => Lang.Rewrite[Calc.Expr.T, Val.Num.T]:
     def rewrite(t: Calc.Expr.T): Val.Num.T =
       t.ex match
         case Calc.Expr.Add((l, r)) =>
@@ -38,10 +39,16 @@ object CalcEval:
     xform.transform(expr)
 
   def main(args: Array[String]): Unit =
-    val e1 = Calc.Expr.Add(lhs = Calc.Expr.Triv((value = Calc.Num((n = 2)))), rhs = Calc.Expr.Triv((value = Calc.Num((n = 3)))))
+    val e1 = Calc.Expr.Add(
+      lhs = Calc.Expr.Triv((value = Calc.Num((n = 2)))),
+      rhs = Calc.Expr.Triv((value = Calc.Num((n = 3)))),
+    )
     println(s"2 + 3 = ${eval(e1)}")
 
-    val e2 = Calc.Expr.Mul(lhs = Calc.Expr.Triv((value = Calc.Num((n = 4)))), rhs = Calc.Expr.Triv((value = Calc.Num((n = 5)))))
+    val e2 = Calc.Expr.Mul(
+      lhs = Calc.Expr.Triv((value = Calc.Num((n = 4)))),
+      rhs = Calc.Expr.Triv((value = Calc.Num((n = 5)))),
+    )
     println(s"4 * 5 = ${eval(e2)}")
   end main
 end CalcEval

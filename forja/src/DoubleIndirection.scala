@@ -35,27 +35,35 @@ end DL3
 object DL3 extends DL3
 
 object DoubleIndirection:
-  given removeFoo: (xform: => Lang.Transform[DL1.Expr.type, DL2.Expr.type])
-    => Lang.Rewrite[DL1.Expr.Foo.T, DL2.Expr.T]:
+  given removeFoo: (
+      xform: => Lang.Transform[DL1.Expr.type, DL2.Expr.type],
+  ) => Lang.Rewrite[DL1.Expr.Foo.T, DL2.Expr.T]:
     def rewrite(t: DL1.Expr.Foo.T): DL2.Expr.T =
       val DL1.Expr.Foo(Tuple1(a)) = t.runtimeChecked
       xform.transform(a)
 
-  given removeBar: (xform: => Lang.Transform[DL2.Expr.type, DL3.Expr.type])
-    => Lang.Rewrite[DL2.Expr.Bar.T, DL3.Expr.T]:
+  given removeBar: (
+      xform: => Lang.Transform[DL2.Expr.type, DL3.Expr.type],
+  ) => Lang.Rewrite[DL2.Expr.Bar.T, DL3.Expr.T]:
     def rewrite(t: DL2.Expr.Bar.T): DL3.Expr.T =
       val DL2.Expr.Bar(Tuple1(b)) = t.runtimeChecked
       xform.transform(b.asInstanceOf[DL2.Expr.T]) // need a cast here :(
 
   private val xform1 = summon[Lang.Transform[DL1.Expr.type, DL2.Expr.type]]
-  private val xform2 = summon[Lang.Transform[DL2.Expr.type, DL3.Expr.type]] // why does LSP complain but seems to work fine?
+  private val xform2 = summon[
+    Lang.Transform[DL2.Expr.type, DL3.Expr.type],
+  ] // why does LSP complain but seems to work fine?
 
   def main(args: Array[String]): Unit =
-    val e = DL1.Expr.Foo((
-      a = DL1.Expr.Bar((
-        b = DL1.Expr.Leaf((n = 42)),
-      )),
-    ))
+    val e = DL1.Expr.Foo(
+      (
+        a = DL1.Expr.Bar(
+          (
+            b = DL1.Expr.Leaf((n = 42)),
+          ),
+        ),
+      ),
+    )
     println(s"DL1: $e")
     val e2 = xform1.transform(e)
     println(s"DL2: $e2")
