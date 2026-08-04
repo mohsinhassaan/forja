@@ -53,7 +53,7 @@ object RemoveOneArmedIf:
     => (xformPred: => Lang.Transform[If1Lang.Pred.type, IfLang.Pred.type])
     => Lang.Rewrite[If1Lang.Expr.If1.T, IfLang.Expr.T]:
     def rewrite(t: If1Lang.Expr.If1.T): IfLang.Expr.T =
-      val If1Lang.Expr.If1(pred, con) = t.runtimeChecked
+      val If1Lang.Expr.If1((pred, con)) = t.runtimeChecked
       IfLang.Expr.If(
         pred = xformPred.transform(pred),
         con = xformExpr.transform(con),

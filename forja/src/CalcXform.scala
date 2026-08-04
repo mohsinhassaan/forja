@@ -29,7 +29,7 @@ object CalcXform:
   given (xform: => Lang.Transform[SubLang.Expr.type, AddLang.Expr.type])
     => Lang.Rewrite[SubLang.Expr.Sub.T, AddLang.Expr.T]:
     def rewrite(t: SubLang.Expr.Sub.T): AddLang.Expr.T =
-      val SubLang.Expr.Sub(l, r) = t.runtimeChecked
+      val SubLang.Expr.Sub((l, r)) = t.runtimeChecked
       AddLang.Expr.Add(
         lhs = xform.transform(l),
         rhs = AddLang.Expr.Mul(

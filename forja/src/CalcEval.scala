@@ -22,15 +22,15 @@ object CalcEval:
     => Lang.Rewrite[Calc.Expr.T, Val.Num.T]:
     def rewrite(t: Calc.Expr.T): Val.Num.T =
       t.ex match
-        case Calc.Expr.Add(l, r) =>
-          val Val.Num(ln) = xform.transform(l).runtimeChecked
-          val Val.Num(rn) = xform.transform(r).runtimeChecked
+        case Calc.Expr.Add((l, r)) =>
+          val Val.Num(Tuple1(ln)) = xform.transform(l).runtimeChecked
+          val Val.Num(Tuple1(rn)) = xform.transform(r).runtimeChecked
           Val.Num((n = ln + rn))
-        case Calc.Expr.Mul(l, r) =>
-          val Val.Num(ln) = xform.transform(l).runtimeChecked
-          val Val.Num(rn) = xform.transform(r).runtimeChecked
+        case Calc.Expr.Mul((l, r)) =>
+          val Val.Num(Tuple1(ln)) = xform.transform(l).runtimeChecked
+          val Val.Num(Tuple1(rn)) = xform.transform(r).runtimeChecked
           Val.Num((n = ln * rn))
-        case Calc.Expr.Triv(Calc.Num(n)) => Val.Num((n = n))
+        case Calc.Expr.Triv(Tuple1(Calc.Num(Tuple1(n)))) => Val.Num((n = n))
 
   private val xform = summon[Lang.Transform[Calc.Expr.type, Val.Num.type]]
 

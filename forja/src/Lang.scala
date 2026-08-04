@@ -8,6 +8,7 @@ import scala.compiletime.asMatchable
 import java.util.Objects
 import scala.compiletime.Erased
 import scala.compiletime.summonInline
+import forja.util.TrivialMatch
 
 trait Lang:
   final transparent inline given this.type = this
@@ -318,8 +319,8 @@ object Lang:
     // This issue only happens in patterns; the apply above translates to new T properly.
     def unapply(t: T)(using
         ng: NotGiven[ReplaceWith[?]],
-    )(using et: EffectiveType[Members]): et.To =
-      t.members.asInstanceOf[et.To]
+    )(using et: EffectiveType[Members]): TrivialMatch[et.To] =
+      TrivialMatch(t.members.asInstanceOf[et.To])
     end unapply
   end Term
 
@@ -640,12 +641,12 @@ object Test:
     println(ping2)
 
     y match
-      case L2.Bar(s, opt) =>
+      case L2.Bar((s, opt)) =>
         println((s, opt))
     end match
 
     ping2.ex match
-      case L2.Bar(s, opt) =>
+      case L2.Bar((s, opt)) =>
         println(s"$s, $opt")
       // case L2.Ping.Bob(s, opt) =>
       //   println("bob")
@@ -697,15 +698,15 @@ object Test:
     println(pong)
 
     nc.ex match
-      case L2.Ping.NewCase(s, opt) => println(s"NewCase: $s")
-      case L2.Ping.Pong(k, foo)    => println(s"Pong: $k")
-      case L2.Ping.Bob(k, foo)     => println(s"Bob: $k")
+      case L2.Ping.NewCase((s, opt)) => println(s"NewCase: $s")
+      case L2.Ping.Pong((k, foo))    => println(s"Pong: $k")
+      case L2.Ping.Bob((k, foo))     => println(s"Bob: $k")
     end match
 
     pong.ex match
-      case L2.Ping.NewCase(s, opt) => println(s"NewCase: $s")
-      case L2.Ping.Pong(k, foo)    => println(s"Pong: $k")
-      case L2.Ping.Bob(k, foo)     => println(s"Bob: $k")
+      case L2.Ping.NewCase((s, opt)) => println(s"NewCase: $s")
+      case L2.Ping.Pong((k, foo))    => println(s"Pong: $k")
+      case L2.Ping.Bob((k, foo))     => println(s"Bob: $k")
     end match
   end innerSumTest
 end Test
