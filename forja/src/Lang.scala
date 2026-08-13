@@ -2,13 +2,20 @@ package forja
 
 import scala.util.NotGiven
 import scala.deriving.Mirror
-import forja.util.InlineConversion
 import scala.annotation.publicInBinary
 import scala.compiletime.asMatchable
 import java.util.Objects
 import scala.compiletime.Erased
 import scala.compiletime.summonInline
 import forja.util.TrivialMatch
+import scala.quoted.Type
+import forja.util.TupleMacros.*
+import forja.util.ExprMacros.*
+import scala.quoted.Quotes
+import scala.quoted.Expr
+import scala.quoted.quotes
+import scala.annotation.tailrec
+import forja.LangMacros.*
 
 trait Lang:
   final transparent inline given this.type = this
@@ -44,14 +51,14 @@ object Lang:
   end TNode
 
   object TNode:
-    final class Launder[N <: Node, T]
+    final class Launder[T, N <: Node]
 
-    final class Aux[N0 <: Node, T] extends TNode[T]:
+    final class Aux[T, N0 <: Node] extends TNode[T]:
       type N = N0
     end Aux
 
     inline given instance
-        : [N <: Node, T] => (inline ev: Launder[N, T]) => Aux[N, T] =
+        : [T, N <: Node] => (inline ev: Launder[T, N]) => Aux[T, N] =
       new Aux
     end instance
   end TNode
@@ -96,255 +103,338 @@ object Lang:
     end instance
   end NodeReplaceWith
 
-  abstract class Node:
-    final transparent inline given this.type = this
-    class ReplaceWith[OtherNode <: Node]
-    open class Retract extends ReplaceWith[Node.Empty.type]
+  sealed abstract class Data:
+    type Node <: Lang.Node
+  end Data
 
-    type T
+  trait Node:
+    node =>
+    final transparent inline given node.type = node
 
-    inline given TNode.Launder[this.type, T] = new TNode.Launder
+    abstract class ReplaceWith[Replacement0 <: Node] extends Node.ReplaceWithAux[node.type]:
+      final type Replacement = Replacement0
+    end ReplaceWith
+
+    abstract class Retract extends ReplaceWith[Nothing]
+
+    type T <: Data { type Node = node.type }
+
+    inline given TNode.Launder[T, this.type] = new TNode.Launder
   end Node
 
   object Node:
-    object Empty extends Node:
-      type T = Nothing
-    end Empty
+    sealed abstract class ReplaceWithAux[N <: Node]:
+      type Replacement <: Node
+    end ReplaceWithAux
   end Node
 
-  abstract class Sum extends Node:
+  trait Sum extends Node:
     sum =>
     type Case <: Node
-    object Opaque:
-      into opaque type T = Any
-      extension (t: T)
-        transparent inline def ex(using
-            inline ng: NotGiven[ReplaceWith[?]],
-        )(using et: Sum.EffectiveType[Sum.this.type]): et.T =
-          // because it will claim unexhaustive no matter what as of writing :(
-          t.asInstanceOf[et.T].runtimeChecked
-        end ex
-      end extension
-    end Opaque
-    override type T = Opaque.T
 
-    abstract class Extends extends Sum, Selectable:
+    final into class T(val ordinal: Int, val t: Node#T) extends Data:
+      type Node = sum.type
+      // transparent inline def ex(using inline ng: NotGiven[ReplaceWith[?]])(using et: Sum.EffectiveType[sum.type]): et.T =
+      //   t.asInstanceOf[et.T].runtimeChecked
+      // end ex
+    end T
+
+    object T:
+      // inline given broadConversion: [T <: Node#T] => Sum.BroadConversion[T, sum.T] = new Sum.BroadConversion
+
+      // inline given identUpConversion: Sum.IdentUpConversion[T] = new Sum.IdentUpConversion
+      // inline given ordinalUpConversion: [T <: Node#T, V <: Sum#T] => (ord: Sum.OrdinalOf[T, sum.T]) => (rec: Sum.UpConversion[sum.T, V]) => Sum.OrdinalUpConversion[T, sum.T, ord.Ord, sum.type, V, rec.type] =
+      //   new Sum.OrdinalUpConversion(rec)
+      // end ordinalUpConversion
+    end T
+
+    trait Extends extends Sum:
       final type Super = sum.type
-      final inline given InlineConversion.ByCast[T, sum.T] =
-        new InlineConversion.ByCast
     end Extends
   end Sum
 
   object Sum:
-    // Intentionally over-broad conversion so we see error messages from the summons inside it, not the generic inapplicable conversion message (that is, act like there is no conversion)
-    inline given subtypeConversionPoint: [T, U, ET]
-      => (inline ng: NotGiven[T =:= U]) => (tn: TNode[T]) => (un: TNode[U])
-      => (unet: EffectiveType[un.N]) => (unet.T =:= ET)
-      => InlineConversion.ByCast[T, U] =
-      // Not sure how useful this is, but it's a sanity check to ensure no one is trying to use a replaced Sum instead of its replacement.
-      summonInline[NotGiven[NodeReplaceWith[un.N]]]
-      // Extra type param ET is used to "encourage" the compiler to print the actual type, not a term reference to part of our inline elaboration,
-      // in case this summon fails.
-      summonInline[T <:< ET]
-      new InlineConversion.ByCast[T, U]
-    end subtypeConversionPoint
-
-    sealed abstract class SMirror[S <: Sum] extends Erased:
+    sealed trait CaseList[S <: Sum] extends Erased:
       type Cases <: Tuple
-    end SMirror
+    end CaseList
 
-    object SMirror:
-      final class Aux[S <: Sum, Cases0 <: Tuple] extends SMirror[S]:
+    object CaseList:
+      final class Aux[S <: Sum, Cases0 <: Tuple] extends CaseList[S]:
         type Cases = Cases0
       end Aux
 
-      final class Launder[S <: Sum, Cases <: Tuple]
-
-      object Launder:
-        given instance: [S <: Sum] => (S: S) => (mirror: Mirror.SumOf[S.Case])
-          => Launder[S, mirror.MirroredElemTypes] = new Launder
-      end Launder
-
-      inline given instance: [S <: Sum, Cases <: Tuple]
-        => (inline ev: Launder[S, Cases]) => Aux[S, Cases] =
-        new Aux
+      transparent inline given instance: [S <: Sum] => CaseList.Aux[S, ? <: Tuple] =
+        ${ instanceImpl[S] }
       end instance
-    end SMirror
 
-    sealed abstract class SSuper[S <: Sum#Extends] extends Erased:
-      type Super <: Sum
-    end SSuper
+      private[Sum] def instanceImpl[S <: Sum : Type](using Quotes): Expr[CaseList.Aux[S, ? <: Tuple]] =
+        val prefix: List[Type[?]] = Type.of[S] match
+          case '[type up <: Sum; Sum#Extends { type Super = up }] =>
+            instanceImpl[up] match
+              case '{ type prefix <: Tuple; $_ : CaseList.Aux[?, prefix] } =>
+                Type.of[prefix].toList
+            end match
+          case '[S] => Nil
+        end prefix
 
-    object SSuper:
-      final class Aux[S <: Sum#Extends, Super0 <: Sum] extends SSuper[S]:
-        type Super = Super0
-      end Aux
+        Type.of[S] match
+          case '[ S { type Case = cse } ] =>
+            Expr.summonOrAbort[Mirror.SumOf[cse]] match
+              case '{ type cases <: Tuple; $_ : Mirror.Sum { type MirroredElemTypes = cases }} =>
+                val localCases = Type.of[cases]
+                  .toList
+                  .map:
+                    case '[type n <: Node; n] =>
+                      effectiveNodeImpl[n]
+                  .filter:
+                    case '[Nothing] => false
+                    case _ => true
+                end localCases
+                (prefix ::: localCases).toTupleType match
+                  case '[type casesFinal <: Tuple; casesFinal] =>
+                    '{ new CaseList.Aux[S, casesFinal] }
+                end match
+            end match
+        end match
+      end instanceImpl
+    end CaseList
 
-      final class Launder[S <: Sum#Extends, Super]
-
-      object Launder:
-        given instance: [S <: Sum#Extends] => (S: S) => Launder[S, S.Super] =
-          new Launder
-      end Launder
-
-      inline given instance: [S <: Sum#Extends, Super <: Sum]
-        => (inline ev: Launder[S, Super]) => Aux[S, Super] =
-        new Aux
-      end instance
-    end SSuper
-
-    sealed abstract class EffectiveType[S] extends Erased:
-      type T
-    end EffectiveType
-
-    object EffectiveType:
-      final class Aux[S <: Sum, T0] extends EffectiveType[S]:
-        type T = T0
-      end Aux
-
-      inline given inst: [S <: Sum] => (list: EffectiveTypeList[S])
-        => (proj: EffectiveTypeProjection[list.Cases])
-        => Aux[S, Tuple.Union[proj.T]] =
-        new Aux
-      end inst
-
-      sealed abstract class EffectiveTypeProjection[Tpl <: Tuple]
-          extends Erased:
-        type T <: Tuple
-      end EffectiveTypeProjection
-
-      object EffectiveTypeProjection:
-        final class Aux[Tpl <: Tuple, T0 <: Tuple]
-            extends EffectiveTypeProjection[Tpl]:
-          type T = T0
-        end Aux
-
-        inline given empty: Aux[EmptyTuple, EmptyTuple] = new Aux
-
-        inline given cons: [Hd <: Node, Tl <: Tuple] => (Hd: NodeT[Hd])
-          => (rec: EffectiveTypeProjection[Tl])
-          => Aux[Hd *: Tl, Hd.T *: rec.T] = new Aux
-      end EffectiveTypeProjection
-    end EffectiveType
-
-    sealed abstract class EffectiveTypeList[S <: Sum] extends Erased:
+    sealed trait CaseListT[T <: Sum#T] extends Erased:
       type Cases <: Tuple
-    end EffectiveTypeList
+    end CaseListT
 
-    object EffectiveTypeList:
-      final class Aux[S <: Sum, Cases0 <: Tuple] extends EffectiveTypeList[S]:
+    object CaseListT:
+      final class Aux[T <: Sum#T, Cases0 <: Tuple] extends CaseListT[T]:
         type Cases = Cases0
       end Aux
 
-      inline given instBase: [S <: Sum]
-        => (inline ng: NotGiven[S <:< Sum#Extends]) => (mirror: SMirror[S])
-        => (tc: TransformedCases[mirror.Cases])
-        => Aux[S, tc.TC] =
-        new Aux
-      end instBase
+      transparent inline given instance: [T <: Sum#T] => Aux[T, ? <: Tuple] =
+        ${ instanceImpl[T] }
+      end instance
 
-      inline given instExtends: [S <: Sum#Extends] => (S: SSuper[S])
-        => (rec: EffectiveTypeList[S.Super]) => (mirror: SMirror[S])
-        => (tc: TransformedCases[mirror.Cases])
-        => Aux[S, Tuple.Concat[rec.Cases, tc.TC]] =
-        new Aux
-      end instExtends
+      private def instanceImpl[T <: Sum#T : Type](using Quotes): Expr[Aux[T, ? <: Tuple]] =
+        Type.of[T].tNode match
+          case '[type n <: Sum; n] =>
+            CaseList.instanceImpl[n] match
+              case '{ $_ : CaseList.Aux[?, tpl] } =>
+                Type.of[tpl] match
+                  case '[type tpl <: Tuple; tpl] =>
+                    Type.of[tpl]
+                      .toList
+                      .map:
+                        case '[type cs <: Node; cs] =>
+                          Type.of[cs].nodeT
+                      .toTupleType
+                      match
+                        case '[type tplT <: Tuple; tplT] =>
+                          '{ new CaseListT.Aux[T, tplT] }
+                      end match
+                end match
+            end match
+        end match
+      end instanceImpl
+    end CaseListT
 
-      inline given instExtendsEmpty: [S <: Sum#Extends]
-        => (inline ng: NotGiven[SMirror[S]])
-        => (S: SSuper[S])
-        => (rec: EffectiveTypeList[S.Super])
-        => Aux[S, rec.Cases] =
-        new Aux
-      end instExtendsEmpty
-    end EffectiveTypeList
+    sealed abstract class OrdinalOf[T <: Node#T, U <: Sum#T] extends Erased:
+      type Ord <: Int
+    end OrdinalOf
 
-    sealed abstract class TransformedCases[Cases <: Tuple] extends Erased:
-      type TC <: Tuple
-    end TransformedCases
-
-    object TransformedCases:
-      final class Aux[Cases <: Tuple, TC0 <: Tuple]
-          extends TransformedCases[Cases]:
-        type TC = TC0
+    object OrdinalOf:
+      final class Aux[T <: Node#T, U <: Sum#T, Ord0 <: Int] extends OrdinalOf[T, U]:
+        type Ord = Ord0
       end Aux
 
-      inline given empty: Aux[EmptyTuple, EmptyTuple] = new Aux
+      transparent inline given instance: [T <: Node#T, U <: Sum#T] => (csl: CaseListT[U]) => (inline ev: T <:< Tuple.Union[csl.Cases]) => OrdinalOf[T, U] =
+        ${ instanceImpl[T, U, csl.Cases] }
+      end instance
 
-      inline given cons: [Hd <: Node, Tl <: Tuple]
-        => (inline ng: NotGiven[NodeRetract[Hd]])
-        => (eht: Lang.EffectiveNodeType[Hd])
-        => (ttl: TransformedCases[Tl])
-        => Aux[Hd *: Tl, eht.To *: ttl.TC] =
-        new Aux
-      end cons
+      private def instanceImpl[T <: Node#T : Type, U <: Sum#T : Type, Cases <: Tuple : Type](using Quotes): Expr[OrdinalOf[T, U]] =
+        import quotes.reflect.*
+        val ord = Type.of[Cases]
+          .toList
+          .indexWhere:
+            case '[? <: T] => true
+            case _ => false
+        if ord == -1
+        then
+          report.errorAndAbort(s"Could not find ${TypeRepr.of[T].show} in ${TypeRepr.of[Cases].show}")
+        end if
+        ConstantType(IntConstant(ord)).asType match
+          case '[type ord <: Int; ord] =>
+            '{ new Aux[T, U, ord] }
+        end match
+      end instanceImpl
+    end OrdinalOf
 
-      inline given consRetracted: [Hd <: Node, Tl <: Tuple]
-        => NodeRetract[Hd]
-        => (ttl: TransformedCases[Tl])
-        => Aux[Hd *: Tl, ttl.TC] =
-        new Aux
-      end consRetracted
-    end TransformedCases
-  end Sum
+    final class BroadConversion[T <: Node#T, U <: Sum#T] extends Conversion[T, U], Erased:
+      inline def apply(t: T): U =
+        ${ BroadConversion.applyImpl[T, U]('{ t }) }
+      end apply
+    end BroadConversion
 
-  abstract class Term[Members <: NamedTuple.AnyNamedTuple] extends Node:
-    self: Singleton =>
-    type MembersType = Members
+    sealed abstract class UpConversion[T <: Node#T, U <: Sum#T] extends Erased:
+      inline def apply(t: T): U
+    end UpConversion
+
+    object UpConversion:
+      opaque type Arg[T <: Node#T] = T
+      opaque type Result[U <: Sum#T] = U
+
+      object Arg:
+        inline def apply[T <: Node#T](t: T): Arg[T] = t
+      end Arg
+
+      extension [U <: Sum#T](res: Result[U])
+        inline def value: U = res
+      end extension
+
+      transparent inline given compute: [T <: Node#T, U <: Sum#T] => (arg: Arg[T]) => (conv: UpConversion[T, U]) => Result[U] =
+        conv(arg)
+      end compute
+    end UpConversion
+
+    final class IdentUpConversion[T <: Sum#T] extends UpConversion[T, T]:
+      inline def apply(t: T): T = t
+    end IdentUpConversion
+
+    final class OrdinalUpConversion[T <: Node#T, U <: Sum#T, Ord <: Int, S <: Sum, V <: Sum#T, Rec <: UpConversion[U, V]](val rec: Rec) extends UpConversion[T, V]:
+      inline def apply(t: T): V =
+        val S: S = summonInline[S]
+        rec(S.T(valueOf[Ord], t).asInstanceOf[U])
+      end apply
+    end OrdinalUpConversion
+
+    // final class Ordinal[S, T <: Node#T](val i: Int) extends AnyVal
+
+    // object Ordinal:
+    //   sealed abstract class Search[Cases <: Tuple, T <: Node#T] extends Erased:
+    //     type I <: Int
+    //   end Search
+
+    //   object Search:
+    //     final class Aux[Cases <: Tuple, T <: Node#T, I0 <: Int] extends Search[Cases, T]:
+    //       type I = I0
+    //     end Aux
+
+    //     inline given found: [T <: Node#T, Tl <: Tuple] => Aux[T *: Tl, T, 0] = new Aux
+
+    //     inline given succ: [T <: Node#T, Hd <: Node#T, Tl <: Tuple] => (inline ng: NotGiven[T =:= Hd]) => (rec: Search[Tl, T]) => Aux[Hd *: Tl, T, rec.I + 1] = new Aux
+    //   end Search
+
+    //   inline given instance: [S <: Sum, T <: Node#T] => (tl: Sum.EffectiveTypeList[S]) => (tlp: Sum.EffectiveType.EffectiveTypeProjection[tl.Cases]) => (src: Search[tlp.T, T]) => (v: ValueOf[src.I]) => Ordinal[S, T] =
+    //     Ordinal(v.value)
+    //   end instance
+    // end Ordinal
+
+    // // Intentionally over-broad conversion so we see error messages from the summons inside it, not the generic inapplicable conversion message (that is, act like there is no conversion)
+    // inline given subtypeConversionPoint: [T <: Node#T, U <: Sum#T, ET]
+  //     => (inline ng: NotGiven[T =:= U]) => (tn: TNode[T]) => (un: TNode[U])
+  //     => (unet: EffectiveType[un.N]) => (unet.T =:= ET)
+  //     => SubtypeConversion[T, U] =
+  //     // Not sure how useful this is, but it's a sanity check to ensure no one is trying to use a replaced Sum instead of its replacement.
+  //     summonInline[NotGiven[NodeReplaceWith[un.N]]]
+  //     // Extra type param ET is used to "encourage" the compiler to print the actual type, not a term reference to part of our inline elaboration,
+  //     // in case this summon fails.
+  //     summonInline[T <:< ET]
+  //     new SubtypeConversion[T, U](
+  //       sum = summonInline[un.N].asInstanceOf[Sum],
+  //       ordinal = summonInline[Ordinal[un.N, T]].i,
+  //     )
+  //   end subtypeConversionPoint
+  // end Sum
+
+  trait Term[Members <: NamedTuple.AnyNamedTuple] extends Node:
+    term: Singleton =>
+
+    // private[Lang] given ordinal: Term.Ordinal[term.type] = deferred
+    
     final class T @publicInBinary private[Lang] (
-        private[Lang] val members: Tuple,
-    ):
-      private[Lang] val _outer: AnyRef = self.asInstanceOf[AnyRef]
-      override def toString(): String = s"${self.getClass().getName()}$members"
+        private[Lang] val repr: Any,
+    ) extends Data:
+      type Node = term.type
+      override def toString(): String = s"${term.getClass().getName()}$repr"
       override def equals(obj: Any): Boolean =
         obj.asMatchable match
-          case other: T => members == other.members
+          case other: T => repr == other.repr
         end match
       end equals
       override def hashCode(): Int =
-        Objects.hash(self, members)
+        Objects.hash(term, repr)
       end hashCode
     end T
 
-    private[Lang] def isMyT(v: Any): Boolean =
-      v.isInstanceOf[T] && v
-        .asInstanceOf[T]
-        ._outer
-        .eq(self.asInstanceOf[AnyRef])
-
-    inline def apply(using
-        inline ng: NotGiven[ReplaceWith[?]],
-    )(using et: EffectiveType[Members])(members: et.To): T =
-      T(members.asInstanceOf)
+    inline def apply(using repr: Term.Repr[Members])(using
+      inline ng: NotGiven[Node.ReplaceWithAux[term.type]],
+      inline ev: repr.R <:< Unit,
+    )(): T =
+      new T(())
     end apply
+
+    inline def apply(using repr: Term.Repr[Members])(using
+        inline ng: NotGiven[Node.ReplaceWithAux[term.type]],
+        inline ng2: NotGiven[repr.R <:< Unit],
+    )(t: repr.R): T =
+      new T(t)
+    end apply
+
+    // TODO: 
 
     // Patterns and inline do not go well together. Making this inline will create and then call
     // a lambda with the inline body, which is strictly worse than just calling the method.
     // This issue only happens in patterns; the apply above translates to new T properly.
-    def unapply(t: T)(using
-        ng: NotGiven[ReplaceWith[?]],
-    )(using et: EffectiveType[Members]): TrivialMatch[et.To] =
-      TrivialMatch(t.members.asInstanceOf[et.To])
+    def unapply(using repr: Term.Repr[Members])(t: T)(using NotGiven[Node.ReplaceWithAux[term.type]]): Term.UnapplyR[repr.R] =
+      // TODO: exactly this but at compile time, or I suspect TrivialMatch will be boxed
+      val res =
+        if t.repr.isInstanceOf[Unit]
+        then true
+        else TrivialMatch(t.repr.asInstanceOf[repr.R])
+      end res
+      res.asInstanceOf[Term.UnapplyR[repr.R]]
     end unapply
   end Term
 
-  sealed abstract class EffectiveNodeType[From <: Node] extends Erased:
-    type To <: Node
-  end EffectiveNodeType
+  object Term:
+    type UnapplyR[R] = R match
+      case Unit => true
+      case _ => TrivialMatch[R]
+    end UnapplyR
 
-  object EffectiveNodeType:
-    final class Aux[From <: Node, To0 <: Node] extends EffectiveNodeType[From]:
-      type To = To0
-    end Aux
-  end EffectiveNodeType
+    sealed abstract class Repr[Members <: NamedTuple.AnyNamedTuple] extends Erased:
+      type R
+    end Repr
 
-  inline given effectiveNodeIdentity: [N <: Node]
-    => (inline ng: NotGiven[NodeReplaceWith[N]])
-    => EffectiveNodeType.Aux[N, N] =
-    new EffectiveNodeType.Aux
-  inline given effectiveNodeReplaced: [N <: Node] => (r: NodeReplaceWith[N])
-    => (et: EffectiveNodeType[r.OtherNode]) => EffectiveNodeType.Aux[N, et.To] =
-    new EffectiveNodeType.Aux
+    object Repr:
+      final class Aux[Members <: NamedTuple.AnyNamedTuple, R0] extends Repr[Members]:
+        type R = R0
+      end Aux
+
+      given instance0: Aux[NamedTuple.Empty, Unit] = new Aux
+      given instance1: [L <: String, T] => (et: EffectiveType[T]) => Aux[NamedTuple.NamedTuple[Tuple1[L], Tuple1[T]], et.To] = new Aux
+      given instanceN: [Members <: NamedTuple.AnyNamedTuple] => (et: EffectiveType[Members]) => Aux[Members, et.To] = new Aux
+    end Repr
+
+    opaque type Ordinal[Trm <: Term[?]] = Int
+
+    object Ordinal:
+      transparent inline given instance: [Trm <: Term[?]] => Ordinal[Trm] =
+        ${ instanceImpl[Trm] }
+      end instance
+
+      private def instanceImpl[Trm <: Term[?] : Type](using Quotes): Expr[Ordinal[Trm]] =
+        import quotes.reflect.*
+        report.errorAndAbort(TypeRepr.of[Trm].show)
+        Type.of[Trm] match
+          case '[type cs <: Sum#Case; cs] =>
+            report.errorAndAbort(TypeRepr.of[cs].show)
+          case _ => '{ 0 : Ordinal[Trm] }
+        end match
+      end instanceImpl
+    end Ordinal
+  end Term
+
+  trait Atom extends Term[NamedTuple.Empty]:
+    atom: Singleton =>
+  end Atom
 
   sealed abstract class EffectiveType[From] extends Erased:
     type To
@@ -358,35 +448,63 @@ object Lang:
     final class Ident[T] extends Aux[T, T]
   end EffectiveType
 
-  inline given effectiveNode
-      : [T] => (tn: TNode[T]) => (ent: EffectiveNodeType[tn.N])
-        => (N2: NodeT[ent.To]) => EffectiveType.Aux[T, N2.T] =
-    new EffectiveType.Aux
+  transparent inline given effectiveNodeT: [T <: Node#T] => EffectiveType.Aux[T, ? <: Node#T] =
+    ${ effectiveNodeTImpl[T] }
+  end effectiveNodeT
 
-  sealed abstract class EffectiveTupleType[From <: Tuple] extends Erased:
-    type To <: Tuple
-  end EffectiveTupleType
+  @tailrec
+  private def effectiveNodeImpl[N <: Node : Type](using Quotes): Type[? <: Node] =
+    Expr.summon[Node.ReplaceWithAux[N]].runtimeChecked match
+      case None => Type.of[N]
+      case Some('{ type n2 <: Node; $_ : Node.ReplaceWithAux[?] { type Replacement = n2 } }) =>
+        effectiveNodeImpl[n2]
+    end match
+  end effectiveNodeImpl
 
-  object EffectiveTupleType:
-    final class Aux[From <: Tuple, To0 <: Tuple]
-        extends EffectiveTupleType[From]:
-      type To = To0
-    end Aux
+  private def effectiveNodeTImpl[T <: Node#T : Type](using Quotes): Expr[EffectiveType.Aux[T, ? <: Node#T]] =
+    Type.of[T].tNode match
+      case '[type n <: Node; n] =>
+        effectiveNodeImpl[n] match
+          case '[type n2 <: Node; n2] =>
+            Type.of[n2].nodeT match
+              case '[type t2 <: Node#T; t2] =>
+                '{ new EffectiveType.Aux[T, t2] }
+            end match
+        end match
+    end match
+  end effectiveNodeTImpl
 
-    inline given effectiveTupleEmpty: Aux[EmptyTuple, EmptyTuple] =
-      new Aux
-    inline given effectiveTupleCons: [Hd, Tl <: Tuple]
-      => (eh: EffectiveType[Hd]) => (et: EffectiveTupleType[Tl])
-      => Aux[Hd *: Tl, eh.To *: et.To] = new Aux
-  end EffectiveTupleType
+  transparent inline given effectiveTuple: [T <: Tuple] => EffectiveType.Aux[T, ? <: Tuple] =
+    ${ effectiveTupleImpl[T] }
+  end effectiveTuple
+  
+  private def effectiveTupleImpl[T <: Tuple : Type](using Quotes): Expr[EffectiveType.Aux[T, ? <: Tuple]] =
+    Type.of[T]
+      .toList
+      .map:
+        case '[elem] =>
+          Expr.summonOrAbort[EffectiveType[elem]] match
+            case '{ $_ : EffectiveType.Aux[?, elemRes] } =>
+              Type.of[elemRes]
+          end match
+      .toTupleType
+      match
+        case '[type res <: Tuple; res] =>
+          '{ new EffectiveType.Aux[T, res] }
+      end match
+  end effectiveTupleImpl
+  
+  transparent inline given effectiveNamedTuple: [T <: NamedTuple.AnyNamedTuple]
+    => EffectiveType.Aux[T, ? <: NamedTuple.AnyNamedTuple] =
+    ${ effectiveNamedTupleImpl[T] }
+  end effectiveNamedTuple
 
-  inline given effectiveTuple: [T <: Tuple] => (ett: EffectiveTupleType[T])
-    => EffectiveType.Aux[T, ett.To] = new EffectiveType.Aux
-  inline given effectiveNamedTuple: [Nt <: NamedTuple.AnyNamedTuple]
-    => (et: EffectiveTupleType[NamedTuple.DropNames[Nt]])
-    => EffectiveType.Aux[Nt, NamedTuple.NamedTuple[NamedTuple.Names[
-      Nt,
-    ], et.To]] = new EffectiveType.Aux
+  private def effectiveNamedTupleImpl[T <: NamedTuple.AnyNamedTuple : Type](using Quotes): Expr[EffectiveType.Aux[T, ? <: NamedTuple.AnyNamedTuple]] =
+    effectiveTupleImpl[NamedTuple.DropNames[T]] match
+      case '{ type tplRes <: Tuple; $_ : EffectiveType.Aux[?, tplRes] } =>
+        '{ new EffectiveType.Aux[T, NamedTuple.NamedTuple[NamedTuple.Names[T], tplRes]] }
+    end match
+  end effectiveNamedTupleImpl
 
   inline given EffectiveType.Ident[Boolean] = new EffectiveType.Ident
   inline given EffectiveType.Ident[Byte] = new EffectiveType.Ident
@@ -404,311 +522,4 @@ object Lang:
     => EffectiveType.Aux[Option[T], Option[et.To]] = new EffectiveType.Aux
   inline given [T] => (et: EffectiveType[T])
     => EffectiveType.Aux[List[T], List[et.To]] = new EffectiveType.Aux
-
-  // transform
-
-  abstract class Rewrite[From, To]:
-    def rewrite(t: From): To
-  end Rewrite
-
-  sealed abstract class TermMembers[N <: Term[?]] extends Erased:
-    type Members <: NamedTuple.AnyNamedTuple
-  end TermMembers
-
-  object TermMembers:
-    final class Aux[N <: Term[?], M <: NamedTuple.AnyNamedTuple]
-        extends TermMembers[N]:
-      type Members = M
-    end Aux
-
-    final class Launder[N <: Term[?], M <: NamedTuple.AnyNamedTuple]
-
-    object Launder:
-      given instance: [N <: Term[?]] => (N: N) => Launder[N, N.MembersType] =
-        new Launder
-    end Launder
-
-    inline given instance: [N <: Term[?], M <: NamedTuple.AnyNamedTuple]
-      => (inline ev: Launder[N, M]) => Aux[N, M] =
-      new Aux
-  end TermMembers
-
-  abstract class NodeClassTag[N <: Node]:
-    def isInstance(v: Any): Boolean
-  end NodeClassTag
-
-  object NodeClassTag:
-    final class Launder[N <: Node](val node: N)
-
-    object Launder:
-      given instance: [N <: Node] => (N: N) => Launder[N] =
-        new Launder(N)
-    end Launder
-
-    given forTerm: [N <: Term[?]] => (ev: Launder[N])
-      => NodeClassTag[N] =
-      val n = ev.node
-      new NodeClassTag[N]:
-        def isInstance(v: Any): Boolean = n.isMyT(v)
-  end NodeClassTag
-
-  abstract class OptionalRewrite[T]:
-    def applyIfPresent(t: Any): Any
-  end OptionalRewrite
-
-  object OptionalRewrite:
-    given withRewrite: [T] => (rw: Rewrite[T, ?]) => OptionalRewrite[T] =
-      new OptionalRewrite[T]:
-        def applyIfPresent(t: Any): Any = rw.rewrite(t.asInstanceOf[T])
-
-    given withoutRewrite: [T] => (ng: NotGiven[Rewrite[T, ?]])
-      => OptionalRewrite[T] =
-      new OptionalRewrite[T]:
-        def applyIfPresent(t: Any): Any = t
-  end OptionalRewrite
-
-  abstract class SumOptionalRewrite[S <: Sum]:
-    def applyOr(t: Any, fallback: () => Any): Any
-  end SumOptionalRewrite
-
-  object SumOptionalRewrite:
-    final class Launder[S <: Sum](val rw: Any => Any)
-
-    object Launder:
-      given withRewrite: [S <: Sum] => (S: S) => (rw: Rewrite[S.T, ?])
-        => Launder[S] =
-        new Launder(t => rw.rewrite(t.asInstanceOf[S.T]).asInstanceOf[Any])
-    end Launder
-
-    given withRewrite: [S <: Sum] => (ev: Launder[S])
-      => SumOptionalRewrite[S] =
-      val f = ev.rw
-      new SumOptionalRewrite[S]:
-        def applyOr(t: Any, fallback: () => Any): Any = f(t)
-
-    given withoutRewrite: [S <: Sum] => (ng: NotGiven[Launder[S]])
-      => SumOptionalRewrite[S] =
-      new SumOptionalRewrite[S]:
-        def applyOr(t: Any, fallback: () => Any): Any = fallback()
-  end SumOptionalRewrite
-
-  abstract class TransformField[T]:
-    def transformField(t: T): T
-  end TransformField
-
-  object TransformField:
-    given TransformField[Boolean]:
-      def transformField(t: Boolean): Boolean = t
-    given TransformField[Byte]:
-      def transformField(t: Byte): Byte = t
-    given TransformField[Char]:
-      def transformField(t: Char): Char = t
-    given TransformField[Short]:
-      def transformField(t: Short): Short = t
-    given TransformField[Int]:
-      def transformField(t: Int): Int = t
-    given TransformField[Long]:
-      def transformField(t: Long): Long = t
-    given TransformField[Float]:
-      def transformField(t: Float): Float = t
-    given TransformField[Double]:
-      def transformField(t: Double): Double = t
-    given TransformField[String]:
-      def transformField(t: String): String = t
-    given TransformField[Unit]:
-      def transformField(t: Unit): Unit = t
-
-    given nodeField: [T] => (tn: TNode[T]) => (ent: EffectiveNodeType[tn.N])
-      => (xform: => Transform[ent.To, ?]) => TransformField[T] =
-      new TransformField[T]:
-        def transformField(t: T): T =
-          xform.transformAny(t.asInstanceOf[Any]).asInstanceOf[T]
-
-    given optionField
-        : [T] => (inner: TransformField[T]) => TransformField[Option[T]] =
-      new TransformField[Option[T]]:
-        def transformField(t: Option[T]): Option[T] =
-          t.map(inner.transformField)
-
-    given listField
-        : [T] => (inner: TransformField[T]) => TransformField[List[T]] =
-      new TransformField[List[T]]:
-        def transformField(t: List[T]): List[T] =
-          t.map(inner.transformField)
-  end TransformField
-
-  abstract class TransformTuple[Tpl <: Tuple]:
-    def transformTuple(t: Tuple): Tuple
-  end TransformTuple
-
-  object TransformTuple:
-    given empty: TransformTuple[EmptyTuple]:
-      def transformTuple(t: Tuple): Tuple = EmptyTuple
-
-    given cons: [Hd, Tl <: Tuple] => (hd: TransformField[Hd])
-      => (tl: => TransformTuple[Tl]) => TransformTuple[Hd *: Tl] =
-      new TransformTuple[Hd *: Tl]:
-        def transformTuple(t: Tuple): Tuple =
-          val net = t.asInstanceOf[NonEmptyTuple]
-          hd.transformField(net.head.asInstanceOf[Hd]) *: tl.transformTuple(
-            net.tail,
-          )
-  end TransformTuple
-
-  abstract class SumCaseDispatch[S <: Sum, Cases <: Tuple]:
-    def dispatch(t: Any): Any
-  end SumCaseDispatch
-
-  object SumCaseDispatch:
-    given empty: [S <: Sum] => SumCaseDispatch[S, EmptyTuple] =
-      new SumCaseDispatch[S, EmptyTuple]:
-        def dispatch(t: Any): Any = throw MatchError(t)
-
-    given cons: [S <: Sum, Hd <: Node, Tl <: Tuple] => (tag: NodeClassTag[Hd])
-      => (xform: => Transform[Hd, ?]) => (rest: => SumCaseDispatch[S, Tl])
-      => SumCaseDispatch[S, Hd *: Tl] =
-      new SumCaseDispatch[S, Hd *: Tl]:
-        def dispatch(t: Any): Any =
-          if tag.isInstance(t) then xform.transformAny(t)
-          else rest.dispatch(t)
-  end SumCaseDispatch
-
-  abstract class Transform[From <: Node, To <: Node]:
-    private[Lang] def transformAny(t: Any): Any
-  end Transform
-
-  object Transform:
-    extension [From <: Node, To <: Node](self: Transform[From, To])
-      inline def transform[FT, TT](using
-          NodeT.Aux[From, FT],
-          NodeT.Aux[To, TT],
-      )(t: FT): TT =
-        self.transformAny(t).asInstanceOf[TT]
-
-    given forTerm: [N <: Term[?], To <: Node] => (N: N)
-      => (tm: TermMembers[N])
-      => (tt: TransformTuple[NamedTuple.DropNames[tm.Members]])
-      => (nt: NodeT[N]) => (rw: OptionalRewrite[nt.T])
-      => Transform[N, To] =
-      new Transform[N, To]:
-        private[Lang] def transformAny(t: Any): Any =
-          val raw = t.asInstanceOf[N.T]
-          val transformed = tt.transformTuple(raw.members)
-          val result = new N.T(transformed)
-          rw.applyIfPresent(result)
-
-    given forSum: [S <: Sum, To <: Node] => (etl: Sum.EffectiveTypeList[S])
-      => (dispatch: SumCaseDispatch[S, etl.Cases])
-      => (rw: SumOptionalRewrite[S])
-      => Transform[S, To] =
-      new Transform[S, To]:
-        private[Lang] def transformAny(t: Any): Any =
-          rw.applyOr(t, () => dispatch.dispatch(t))
-  end Transform
 end Lang
-
-object Test:
-  def main(args: Array[String]): Unit =
-    trait L1 extends Lang:
-      object Foo extends Lang.Term[(i: Int, j: Int)]
-
-      object Ping extends Lang.Sum:
-        sealed trait Case extends Lang.Node
-
-        object Pong extends Lang.Term[(k: Int, foo: Foo.T)], Case
-        object Bob extends Lang.Term[(k: Int, foo: Foo.T)], Case
-      end Ping
-    end L1
-    object L1 extends L1
-
-    val x = L1.Foo(i = 42, j = 43)
-    println(x)
-    val ping: L1.Ping.T = L1.Ping.Pong(k = 12, foo = x)
-    println(ping)
-
-    trait L2 extends Lang.Extend[L1]:
-      export up.{Foo as _, *}
-      object Bar extends Lang.Term[(s: String, opt: Option[up.Foo.T])]
-
-      given r1: up.Foo.ReplaceWith[Bar.type]()
-      given r2: up.Ping.Pong.ReplaceWith[Bar.type]()
-      // given up.Foo.Retract
-      // given up.Ping.Bob.Retract()
-    end L2
-    object L2 extends L2
-
-    val y: L2.Bar.T = L2.Bar(s = "hi", opt = Some(L2.Bar("ho", None)))
-    println(y)
-    val ping2: L2.Ping.T = y
-    println(ping2)
-
-    y match
-      case L2.Bar((s, opt)) =>
-        println((s, opt))
-    end match
-
-    ping2.ex match
-      case L2.Bar((s, opt)) =>
-        println(s"$s, $opt")
-      // case L2.Ping.Bob(s, opt) =>
-      //   println("bob")
-    end match
-
-    innerSumTest()
-  end main
-
-  def innerSumTest(): Unit =
-    trait L1 extends Lang:
-      object Foo extends Lang.Term[(i: Int, j: Int)]
-
-      object Ping extends Lang.Sum:
-        sealed trait Case extends Lang.Node
-        object Case:
-          object Pong extends Lang.Term[(k: Int, foo: Foo.T)], Case
-          object Bob extends Lang.Term[(k: Int, foo: Foo.T)], Case
-        export Case.*
-      end Ping
-    end L1
-    object L1 extends L1
-
-    trait L2 extends Lang.Extend[L1]:
-      export up.{Foo as _, Ping as _, *}
-      object Bar extends Lang.Term[(s: String, opt: Option[up.Foo.T])]
-      object Ping extends up.Ping.Extends:
-        sealed trait Case extends Lang.Node
-        object Case:
-          export up.Ping.Case.*
-          object NewCase
-              extends Lang.Term[(s: String, opt: Option[up.Foo.T])],
-                Case
-        export Case.*
-      end Ping
-
-      given up.Foo.ReplaceWith[Bar.type]()
-      given up.Ping.ReplaceWith[Ping.type]()
-    end L2
-    object L2 extends L2
-
-    // Error message should explain what doesn't match
-    // summon[Conversion[L2.Bar.T, L2.Ping.T]]
-
-    val nc: L2.Ping.T = L2.Ping.NewCase(s = "hello", opt = None)
-    println(nc)
-
-    val pong: L2.Ping.T =
-      L2.Ping.Pong(k = 12, foo = L2.Bar(s = "x", opt = None))
-    println(pong)
-
-    nc.ex match
-      case L2.Ping.NewCase((s, opt)) => println(s"NewCase: $s")
-      case L2.Ping.Pong((k, foo))    => println(s"Pong: $k")
-      case L2.Ping.Bob((k, foo))     => println(s"Bob: $k")
-    end match
-
-    pong.ex match
-      case L2.Ping.NewCase((s, opt)) => println(s"NewCase: $s")
-      case L2.Ping.Pong((k, foo))    => println(s"Pong: $k")
-      case L2.Ping.Bob((k, foo))     => println(s"Bob: $k")
-    end match
-  end innerSumTest
-end Test

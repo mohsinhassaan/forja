@@ -1,4 +1,4 @@
-//| mill-version: 1.1.5
+//| mill-version: 1.1.7
 //| mill-jvm-version: temurin:25
 //| mill-jvm-opts: ["--enable-native-access=ALL-UNNAMED"]
 //| mvnDeps:
@@ -23,6 +23,8 @@ trait ForjaModule extends ScalaModule, ScalafixModule:
     "-Wunused:imports",
     "-preview",
     "-language:experimental.erasedDefinitions",
+    // "-Yprint-debug",
+    // "-Vprint:parser,typer",
   )
   override def forkArgs = super.forkArgs() ++ Seq(
     // TODO: fix when Scala 3.8?
