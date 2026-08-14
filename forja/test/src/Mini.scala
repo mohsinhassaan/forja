@@ -4,8 +4,8 @@ import forja.Lang2
 import forja.Sum
 import forja.Term
 import forja.F
-import scala.util.NotGiven
-import forja.TypeAdjust
+import forja.Lang2.SumMeta
+import forja.Lang2.TermMeta
 
 object Mini:
   trait L2 extends Lang2:
@@ -14,39 +14,78 @@ object Mini:
       abstract class Foo derives Term:
         def foo: F[String]
       end Foo
+      object Foo:
+        abstract class Ping derives Term:
+          def x: F[Bar]
+        end Ping
+      end Foo
+
+      abstract class Bar derives Term
     end S
   end L2
 
-  object L2 extends L2, Lang2.Meta[L3.type]
+  object L2 extends L2, Lang2.Impl[L2.type]
 
   trait L3 extends Lang2:
-    object up extends L2
+    object up extends L2, Lang2.Ext
 
     abstract class S derives Sum
     object S:
-      export up.S.*
+      export up.S.{Bar as _, *}
       abstract class Bar derives Term:
         def bar: F[Int]
       end Bar
     end S
   end L3
 
-  object L3 extends L3, Lang2.Meta[L3.type]
+  object L3 extends L3, Lang2.Impl[L3.type]
 
   def main(args: Array[String]): Unit =
-    import Lang2.{IsNode, LaunderNode, HasSameMeta}
-    // erased val a: IsNode.Aux[L2.S, L2.type] = summon[IsNode[L2.S]]
-    // erased val b: IsNode.Aux[L2.S.Foo, L2.type] = summon[IsNode[L2.S.Foo]]
-    
-    // erased val c: LaunderNode.Aux[L3.type, L2.S, L3.S] = summon[LaunderNode[L3.type, L2.S]]
-    // erased val d: LaunderNode.Aux[L3.type, L2.S.Foo, L3.S.Foo] = summon[LaunderNode[L3.type, L2.S.Foo]]
+    import Lang2.{IsNode, LaunderNode}
+    erased val a: IsNode.Aux[L2.S, L2.type, Tuple1["S"]] = summon[IsNode[L2.S]]
 
-    // erased val e = summon[HasSameMeta[L2.S.Foo, L3.S.Foo]]
-    // val f = summon[NotGiven[HasSameMeta[L2.S, L3.S]]]
+    // IsNode.instance[L3.S.Foo.Ping]
+    erased val a1: IsNode.Aux[L3.S.Foo.Ping, L3.type, ("S", "Foo", "Ping")] = IsNode.instance[L3.S.Foo.Ping]
+    erased val a2: IsNode.Aux[L3.up.S.Foo.Ping, L3.type, ("S", "Foo", "Ping")] = IsNode.instance[L3.up.S.Foo.Ping]
+    erased val b: IsNode.Aux[L2.S.Foo, L2.type, ("S", "Foo")] = summon[IsNode[L2.S.Foo]]
+    
+    erased val c: LaunderNode.Aux[L3.type, L2.S, L3.S] = summon[LaunderNode[L3.type, L2.S]]
+    erased val d: LaunderNode.Aux[L3.type, L2.S.Foo, L3.S.Foo] = summon[LaunderNode[L3.type, L2.S.Foo]]
+    erased val e: LaunderNode.Aux[L3.type, L3.up.S.Foo.Ping, L3.S.Foo.Ping] = LaunderNode.instance[L3.type, L3.up.S.Foo.Ping]
+
+    val _ : SumMeta[L2.S] {
+      type Companion = L2.S.type
+      type Cases = (L2.S.Bar, L2.S.Foo)
+    } = summon[SumMeta[L2.S]]
+
+    val _ : SumMeta[L3.S] {
+      type Companion = L3.S.type
+      type Cases = (L3.S.Bar, L3.S.Foo)
+    } = summon[SumMeta[L3.S]]
+
+    val _ : TermMeta[L2.S.Foo] {
+      type Companion = L2.S.Foo.type
+      type Cases = Tuple1[String]
+      type Labels = Tuple1["foo"]
+    } = summon[TermMeta[L2.S.Foo]]
+
+    // TODO: how to convince it to resolve extension methods on the companion object.
+    // Clearly all the types are right...
+
+    summon[TermMeta[L3.S.Foo]].apply(L3.S.Foo)("str")
+
+    // but this works! It's something.
+    // (notice how Bar gets subtituted)
+
+    val _ : TermMeta[L3.S.Foo.Ping] {
+      type Companion = L3.S.Foo.Ping.type
+      type Cases = Tuple1[L3.S.Bar]
+      type Labels = Tuple1["x"]
+    } = summon[TermMeta[L3.S.Foo.Ping]]
 
     // summon[Lang2.SumMeta[L2.S]]
     // summon[TypeAdjust.Effective[L2.type, L2.S]]
-    L2.sumMeta[L2.S]
+    // L2.sumMeta[L2.S]
     // summon[Lang2.SumMeta[L3.S]]
 
     // This one fails because it's trying to read terms off the trait L3, not the object

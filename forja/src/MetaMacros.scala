@@ -11,36 +11,131 @@ import forja.Lang2.ErasedNode
 import forja.util.ExprMacros.summonOrAbort
 import scala.language.experimental.erasedDefinitions
 import scala.annotation.tailrec
+import scala.collection.mutable
+import forja.Lang2.TermMeta
 
 @publicInBinary
 private[forja] object MetaMacros:
-  def findCompanion[T: Type](using Quotes)(): Expr[Any] =
+  def findCompanionType[T: Type](using Quotes)(): Type[?] =
     import quotes.reflect.*
-    val clsSym = TypeRepr.of[T].classSymbol.get
-    Ident(clsSym.companionModule.termRef).asExpr
-    // clsSym.companionModule.termRef.asType match
-    //   case '[c] =>
-    //     '{
-    //       ${ Expr.summonOrAbort[ValueOf[c]] }
-    //         .value
-    //     }
-    // end match
+    // Expr.summonOrAbort[Lang2.LaunderNode[L, T]] match
+    //   case '{ $_ : Lang2.LaunderNode.Aux[?, ?, n2] } =>
+        val n2Repr = TypeRepr.of[T]
+        def err: Nothing = 
+          report.errorAndAbort(s"Could not find companion module for ${n2Repr.show}")
+        val companion = n2Repr match
+          case TypeRef(base, name) =>
+            base
+              .select(n2Repr.typeSymbol.owner.fieldMember(name))
+          case other =>
+            err
+        end companion
+
+        println(s"companion ${TypeRepr.of[T].show(using Printer.TypeReprStructure)} --> ${companion.show(using Printer.TypeReprStructure)}")
+        companion.asType
+  end findCompanionType
+
+  def findCompanion[T : Type](using Quotes)(): Expr[Any] =
+    import quotes.reflect.*
+    findCompanionType[T]() match
+      case '[companion] =>
+        TypeRepr.of[companion] match
+          case ref: TermRef =>
+            Ident(ref).asExpr
+        end match
+    end match
   end findCompanion
 
   def findTermCasesRaw[T : Type](using Quotes)(): List[(String, Type[?])] =
     import quotes.reflect.*
-
     val tRepr = TypeRepr.of[T]
     tRepr
       .typeSymbol
       .methodMembers
       .flatMap: meth =>
         meth.typeRef.asType match
-          case '[F[t]] =>
-            List((meth.name, Type.of[t]))
+          case '[F[?]] =>
+            tRepr.select(meth).asType match
+              case '[F[t]] =>
+                List((meth.name, Type.of[t]))
+            end match
           case _ => Nil
         end match
   end findTermCasesRaw
+
+  extension (tpe: Type[?])(using Quotes)
+    def asTypeRepr: quotes.reflect.TypeRepr =
+      tpe match
+        case '[tpe] =>
+          quotes.reflect.TypeRepr.of[tpe]
+    end asTypeRepr
+  end extension
+
+  extension (using Quotes)(repr: quotes.reflect.TypeRepr)
+    def asTypeOf[T : Type]: Type[? <: T] =
+      repr.asType match
+        case '[type t <: T; t] =>
+          Type.of[t]
+      end match
+    end asTypeOf
+  end extension
+
+  def buildTerm[Cls <: T : Type, T : Type](using Quotes)(termCasesErased: List[(String, Type[?])]): Expr[Term[T]] =
+    '{
+      forja.Term:
+        new Lang2.TermMeta[T]:
+          def Companion: Companion =
+            ${ findCompanion[T]() }.asInstanceOf[Companion]
+          end Companion
+
+          @publicInBinary
+          def applyImpl(cases: Cases): T =
+            ${
+              import quotes.reflect.*
+              val tpl =
+                if termCasesErased.sizeIs >= 2 && termCasesErased.sizeIs <= 22
+                then
+                  defn.TupleClass(termCasesErased.size)
+                    .typeRef
+                    .appliedTo(termCasesErased.map(_._2.asTypeRepr))
+                else TypeRepr.of[Tuple].typeSymbol.typeRef
+              end tpl
+              tpl.asType match
+                case '[type tpl <: Tuple; tpl] =>
+                  '{
+                    val erasedCases = cases.asInstanceOf[tpl]
+                    ${
+                      import quotes.reflect.*
+                      val dataClsSym = TypeRepr.of[Cls].typeSymbol
+                      val tplSym = TypeRepr.of[tpl].typeSymbol
+                      // report.errorAndAbort(tplSym.fieldMembers.map(_.name).mkString(", "))
+                      Apply(
+                        Select(New(TypeIdent(dataClsSym)), dataClsSym.primaryConstructor),
+                        termCasesErased
+                          .map(_._2)
+                          .zipWithIndex
+                          .map { (tpe, i) =>
+                            tpe match
+                              case '[tpe] =>
+                                tplSym.fieldMember(s"_$i") match
+                                  case accessor if !accessor.isNoSymbol =>
+                                    '{ ${ '{ erasedCases }.asTerm.select(accessor).asExpr }.asInstanceOf[tpe] }.asTerm
+                                  case _ =>
+                                    '{ erasedCases.productElement(${ Expr(i) }).asInstanceOf[tpe] }.asTerm
+                                end match
+                            end match
+                          }
+                          .toList,
+                      )
+                        .asExprOf[T]
+                    }
+                  }
+              end match
+            }
+          end applyImpl
+        end new
+    }
+  end buildTerm
 
   def termDerivedImpl[T : Type](using Quotes): Expr[Term[T]] =
     import quotes.reflect.*
@@ -119,6 +214,7 @@ private[forja] object MetaMacros:
               { _ =>
                 val owner = dataClsSym.methodMember("toString").head
                 given Quotes = owner.asQuotes
+                import quotes.reflect.*
                 Some:
                   '{
                     val builder = StringBuilder()
@@ -144,68 +240,52 @@ private[forja] object MetaMacros:
           List(
             dataClsDecl,
           ),
-          '{
-            forja.Term:
-              new Lang2.TermMeta[T]:
-                def Companion: Companion =
-                  ${ findCompanion[T]() }.asInstanceOf[Companion]
-                end Companion
-
-                @publicInBinary
-                def applyImpl(cases: Cases): T =
-                  ${
-                    val tpl = defn.TupleClass(termCasesErased.size) match
-                      case tpl if tpl.isNoSymbol => TypeRepr.of[Tuple].typeSymbol.typeRef
-                      case tpl => tpl.typeRef.appliedTo(termCasesErased.map(_._2))
-                    end tpl
-                    tpl.asType match
-                      case '[type tpl <: Tuple; tpl] =>
-                        '{
-                          val erasedCases = cases.asInstanceOf[tpl]
-                          ${
-                            val tplSym = tpl.typeSymbol
-                            // report.errorAndAbort(tplSym.fieldMembers.map(_.name).mkString(", "))
-                            Apply(
-                              Select(New(TypeIdent(dataClsSym)), dataClsSym.primaryConstructor),
-                              termCasesErased
-                                .map(_._2)
-                                .zipWithIndex
-                                .map { (tpe, i) =>
-                                  tpe.asType match
-                                    case '[tpe] =>
-                                      tplSym.fieldMember(s"_$i") match
-                                        case accessor if !accessor.isNoSymbol =>
-                                          '{ ${ '{ erasedCases }.asTerm.select(accessor).asExpr }.asInstanceOf[tpe] }.asTerm
-                                        case _ =>
-                                          '{ erasedCases.productElement(${ Expr(i) }).asInstanceOf[tpe] }.asTerm
-                                      end match
-                                  end match
-                                }
-                                .toList,
-                            )
-                              .asExprOf[T]
-                          }
-                        }
-                    end match
-                  }
-                end applyImpl
-              end new
-          }
-          .asTerm,
+          locally {
+            dataClsSym.typeRef.asType match
+              case '[type dataCls <: T; dataCls] =>
+                buildTerm[dataCls, T](termCasesErased.map((name, tpe) => name -> tpe.asType))
+                  .asTerm
+            end match
+          },
         )
         .asExprOf[forja.Term[T]]
     end match
   end termDerivedImpl
 
   def termMetaImpl[L <: Lang2 : Type, T : Type](term: Expr[Term[T]])(using Quotes): Expr[Lang2.TermMeta[T]] =
-    ???
+    import quotes.reflect.*
+
+    val casesRaw = findTermCasesRaw[T]()
+    val cases = casesRaw
+      .map(_._2)
+      .map:
+        case '[cs] =>
+          Expr.summonOrAbort[TypeAdjust.Effective[L, cs]] match
+            case '{ $_ : TypeAdjust.Effective.Aux[?, ?, cs2] } =>
+              TypeRepr.of[cs2]
+          end match
+    end cases
+
+    val labels = casesRaw
+      .map(_._1)
+      .map(label => ConstantType(StringConstant(label)).asType)
+      .toTupleType
+    end labels
+
+    (findCompanionType[T](), cases.map(_.asType).toTupleType, labels).runtimeChecked match
+      case ('[companion], '[type cases <: Tuple; cases], '[type labels <: Tuple; labels]) =>
+        '{ ${ term }.meta.asInstanceOf[TermMeta[T] {
+          type Companion = companion
+          type Cases = cases
+          type Labels = labels
+        }] }
+    end match
   end termMetaImpl
 
-  def findSumCasesRaw[T : Type](using Quotes)(): List[(Type[?], Int)] =
-    import quotes.reflect.*
-    val clsSym = TypeRepr.of[T].classSymbol.get
-    val companionSym = clsSym.companionModule
-    val memberSyms = companionSym
+  def findSumCasesRaw[T : Type](using Quotes)(): List[(String, Type[?], Int)] =
+    val tCompanion = findCompanionType[T]().asTypeRepr
+    val memberSyms = tCompanion
+      .termSymbol
       .typeMembers
       .filter: elemCandidate =>
         elemCandidate.typeRef.asType match
@@ -218,8 +298,10 @@ private[forja] object MetaMacros:
       .sortBy(_.name)
     end memberSyms
     memberSyms
-      .map(_.typeRef.asType)
+      .map: sym =>
+        (sym.name, tCompanion.select(sym).asType)
       .zipWithIndex
+      .map(_ :* _)
   end findSumCasesRaw
 
   def sumDerivedImpl[T : Type](using Quotes): Expr[Sum[T]] =
@@ -297,36 +379,26 @@ private[forja] object MetaMacros:
     end match
   end sumDerivedImpl
 
-  def sumMetaImpl[M <: Lang2 : Type, T : Type](sum: Expr[Sum[T]])(using Quotes): Expr[Lang2.SumMeta[T]] =
+  def sumMetaImpl[L <: Lang2 : Type, T : Type](sum: Expr[Sum[T]])(using Quotes): Expr[Lang2.SumMeta[T]] =
     import quotes.reflect.*
 
-    // report.errorAndAbort(TypeRepr.of[M].classSymbol.get.termRef.show(using Printer.TypeReprStructure))
+    val casesRaw = findSumCasesRaw[T]()
+    val cases = casesRaw
+      .map(_._2)
+      .map:
+        case '[cs] =>
+          Expr.summonOrAbort[TypeAdjust.Effective[L, cs]] match
+            case '{ $_ : TypeAdjust.Effective.Aux[?, ?, cs2] } =>
+              TypeRepr.of[cs2]
+          end match
+    end cases
 
-    TypeRepr.of[M].asType match
-      case '[type l <: Lang2; l] =>
-        val companion = findCompanion[T]()
-        val companionTpe = companion.asTerm.tpe
-
-        val casesRaw = findSumCasesRaw[T]()
-        val cases = casesRaw
-          .map(_._1)
-          .map:
-            case '[cs] =>
-              Expr.summonOrAbort[TypeAdjust.Effective[l, cs]] match
-                case '{ $_ : TypeAdjust.Effective.Aux[?, ?, cs2] } =>
-                  TypeRepr.of[cs2]
-              end match
-        end cases
-
-        report.errorAndAbort(cases.map(_.show(using Printer.TypeReprStructure)).toString)
-
-        (companionTpe.asType, cases.map(_.asType).toTupleType).runtimeChecked match
-          case ('[companion], '[type cases <: Tuple; cases]) =>
-            '{ ${ sum }.meta.asInstanceOf[SumMeta[T] {
-              type Companion = companion
-              type Cases = cases
-            }] }
-        end match
+    (findCompanionType[T](), cases.map(_.asType).toTupleType).runtimeChecked match
+      case ('[companion], '[type cases <: Tuple; cases]) =>
+        '{ ${ sum }.meta.asInstanceOf[SumMeta[T] {
+          type Companion = companion
+          type Cases = cases
+        }] }
     end match
   end sumMetaImpl
 
@@ -377,69 +449,171 @@ private[forja] object MetaMacros:
     end match
   end sumApplyImpl
 
-  def isNodeImpl[N : Type](using Quotes): Expr[Lang2.IsNode.Aux[N, ?]] =
+  extension (using quotes: Quotes)(repr: quotes.reflect.TypeRepr)
+    def sym: quotes.reflect.Symbol =
+      if !repr.termSymbol.isNoSymbol
+      then repr.termSymbol
+      else repr.typeSymbol
+    end sym
+  end extension
+
+  def isNodeImpl[N : Type](using Quotes): Expr[Lang2.IsNode.Aux[N, ?, ?]] =
     import quotes.reflect.*
 
     val langRepr = TypeRepr.of[Lang2]
+    val implRepr = TypeRepr.of[Lang2.Impl[?]]
+    val extRepr = TypeRepr.of[Lang2.Ext]
+
+    println(s"isNode ${TypeRepr.of[N].show}")
+
+    var path: List[String] = Nil
+    val seenNodes = mutable.ArrayBuffer[TypeRepr]()
+    seenNodes += TypeRepr.of[N]
 
     @tailrec
-    def impl(tp: TypeRepr): Type[? <: Lang2] =
-      println("isNode " + tp.show(using Printer.TypeReprStructure))
-      tp match
-        case _ if tp <:< langRepr =>
-          tp.asType match
-            case '[type tp <: Lang2; tp] =>
-              Type.of[tp]
+    def impl(repr: TypeRepr): Type[?] =
+      println(repr.show(using Printer.TypeReprStructure))
+      // inline to allow tailrec
+      inline def terminateAt(top: TypeRepr): Type[?] =
+        if top <:< implRepr
+        then top.asType
+        else if top <:< extRepr
+        then
+          // TODO: more error handling?
+          top match
+            case TermRef(nextBase, _) =>
+              nextBase.asType match
+                case '[type nextBase <: Lang2; nextBase] =>
+                  val restart = launderNodeImplRaw[nextBase](path).asTypeRepr
+                  // Capture cycles, where the top most definition is an alias to something lower down
+                  val lastIdx = seenNodes.indices.last
+                  seenNodes.indexWhere(_ =:= restart) match
+                    case -1 =>
+                      // If we haven't seen this node before, take note and recurse up the type.
+                      // Start the path over since we found a new leaf node.
+                      seenNodes += restart
+                      path = Nil
+                      impl(restart)
+                    case `lastIdx` =>
+                      // The extension just exports our node in the same place.
+                      // Keep the same path and go up another level.
+                      // (will immediately check the top case and take up back to terminateAt)
+                      impl(nextBase)
+                    case idx =>
+                      report.errorAndAbort(s"Cycle detected in the sequence of overrides ${seenNodes.iterator.map(_.show).mkString("; ")}")
+                  end match
+              end match
           end match
-        case TypeRef(base, _) =>
-          impl(base)
-        case TermRef(base, _) =>
-          impl(base)
-        case ThisType(inner) =>
-          impl(inner)
+        else
+          println(s"Found ${top.show} which is neither ${implRepr.show} not ${extRepr.show}")
+          report.errorAndAbort(s"Found ${top.show} which is neither ${implRepr.show} not ${extRepr.show}")
+        end if 
+      end terminateAt
+
+      if repr <:< langRepr
+      then
+        return terminateAt(repr)
+      end if
+
+      def termFromThis(ths: ThisType): TermRef =
+        println(s"termFromThis ${ths.show(using Printer.TypeReprStructure)}")
+
+        ths.typeSymbol.companionModule.termRef
+      end termFromThis
+
+      // Gather names, which are the same for any projection
+      repr match
+        case TermRef(_, name) => path = name :: path
+        case TypeRef(_, name) => path = name :: path
         case _ =>
-          report.errorAndAbort(s"Unsupported: ${tp.show}, starting from ${TypeRepr.of[N].show}")
+          println(s"stop naming: ${repr.show(using Printer.TypeReprStructure)}")
+          report.errorAndAbort(s"stop naming: ${repr.show(using Printer.TypeReprStructure)}")
+      end match
+
+      // Actually inspect the structure
+      repr match
+        case TermRef(base: TermRef, _) =>
+          impl(base)
+        case TermRef(top, _) if top <:< langRepr =>
+          terminateAt(top)
+        case TermRef(ths: ThisType, _) =>
+          impl(termFromThis(ths))
+
+        case TypeRef(base: TermRef, _) =>
+          impl(base)
+        case TypeRef(top, _) if top <:< langRepr =>
+          terminateAt(top)
+        case TypeRef(ths: ThisType, _) =>
+          impl(termFromThis(ths))
+        case _ =>
+          println(s"stop reduction: ${repr.show(using Printer.TypeReprStructure)}")
+          report.errorAndAbort(s"stop reduction: ${repr.show(using Printer.TypeReprStructure)}")
       end match
     end impl
 
-    impl(TypeRepr.of[N]) match
-      case '[type l <: Lang2; l] =>
-        '{ new Lang2.IsNode.Aux[N, l] }
+    val l = impl(TypeRepr.of[N])
+    (l, path.map(name => ConstantType(StringConstant(name)).asType).toTupleType).runtimeChecked match
+      case ('[type l <: Lang2; l], '[type path <: Tuple; path]) =>
+        println((TypeRepr.of[l].show, TypeRepr.of[path].show).toString)
+        '{ new Lang2.IsNode.Aux[N, l, path] }
     end match
   end isNodeImpl
 
-  def launderNodeImpl[L1 <: Lang2 : Type, L2 <: Lang2 : Type, N1 : Type](using Quotes): Expr[Lang2.LaunderNode.Aux[L2, N1, ?]] =
+  def launderNodeImplRaw[L <: Lang2 : Type](path: List[String])(using Quotes): Type[?] =
     import quotes.reflect.*
 
-    def impl(tp: TypeRepr): TypeRepr =
-      println("launder " + tp.show(using Printer.TypeReprStructure))
-      tp match
-        case _ if tp <:< TypeRepr.of[L1] =>
-          TypeRepr.of[L2]
-        case TypeRef(base, name) =>
-          val rec = impl(base)
-          val member = rec.typeSymbol.typeMember(name.stripSuffix("$"))
-          if member.isNoSymbol
-          then
-            println(s"Could not make type ref $name in ${rec.show}, goal is ${TypeRepr.of[N1].show}")
-            report.errorAndAbort(s"Could not make type ref $name in ${rec.show}, goal is ${TypeRepr.of[N1].show}")
-          rec.select(member)
-        case TermRef(base, name) =>
-          val rec = impl(base)
-          val member = rec.termSymbol.fieldMember(name.stripSuffix("$"))
-          if member.isNoSymbol
-          then
-            println(s"Could not make term ref $name in ${rec.show}, goal is ${TypeRepr.of[N1].show}")
-            report.errorAndAbort(s"Could not make term ref $name in ${rec.show}, goal is ${TypeRepr.of[N1].show}")
-          rec.select(member)
-        case ThisType(inner) =>
-          impl(inner)
-        case _ =>
-          report.errorAndAbort(s"Unsupported: ${tp.show}, starting from ${TypeRepr.of[N1].show}")
+    @tailrec
+    def impl(path: List[String], base: TypeRepr): TypeRepr =
+      path match
+        case Nil => report.errorAndAbort(s"Tried to launder into empty path")
+        case leaf :: Nil =>
+          val sym = base.sym
+          val tpSym = sym.typeMember(leaf)
+          if tpSym.isNoSymbol
+          then report.errorAndAbort(s"Could not find leaf type $leaf on ${base.show(using Printer.TypeReprStructure)}")
+
+          base.select(tpSym)
+        case name :: tl =>
+          def err: Nothing =
+            report.errorAndAbort(s"Could not complete path segment $name on ${base.show(using Printer.TypeReprStructure)}")
+          end err
+
+          val sym = base.sym
+          val fieldSym = sym.fieldMember(name) match
+            case s if s.isNoSymbol =>
+              // export forwarders are methods not fields
+              sym.methodMember(name) match
+                case List(s) => s
+                case results => err
+              end match
+            case s => s
+          end fieldSym
+          if fieldSym.isNoSymbol
+          then err
+
+          impl(tl, base.select(fieldSym))
       end match
     end impl
 
-    impl(TypeRepr.of[N1]).asType match
+    println(s"launder ${TypeRepr.of[L]} :: ${path} ")
+
+    val launderResult = impl(path, TypeRepr.of[L])
+
+    println(s"--> ${launderResult.show}")
+
+    launderResult.asType
+  end launderNodeImplRaw
+
+  def launderNodeImpl[Path <: Tuple : Type, L2 <: Lang2 : Type, N1 : Type](using Quotes): Expr[Lang2.LaunderNode.Aux[L2, N1, ?]] =
+    val launderResult = launderNodeImplRaw[L2]:
+      Type.of[Path]
+        .toList
+        .map:
+          case '[type name <: String; name] =>
+            Type.valueOfConstant[name].get
+    end launderResult
+
+    launderResult match
       case '[n2] =>
         '{ new Lang2.LaunderNode.Aux[L2, N1, n2] }
     end match

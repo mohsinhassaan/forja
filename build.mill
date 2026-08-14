@@ -19,6 +19,7 @@ trait ForjaModule extends ScalaModule, ScalafixModule:
     "-feature",
     "-source:future",
     "-Xcheck-macros",
+    // "-Xdebug-macros",
     "-explain-cyclic",
     "-Wunused:imports",
     "-preview",

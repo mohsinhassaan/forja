@@ -13,14 +13,16 @@ end Lang2
 object Lang2:
   sealed trait IsNode[N] extends Erased:
     type L <: Lang2
+    type Path <: Tuple
   end IsNode
 
   object IsNode:
-    final class Aux[N, L0 <: Lang2] extends IsNode[N]:
+    final class Aux[N, L0 <: Lang2, Path0 <: Tuple] extends IsNode[N]:
       type L = L0
+      type Path = Path0
     end Aux
 
-    transparent inline given instance: [N] => (inline ev: Term[N] | Sum[N]) => Aux[N, ?] =
+    transparent inline given instance: [N] => (inline ev: Term[N] | Sum[N]) => Aux[N, ?, ?] =
       ${ MetaMacros.isNodeImpl[N] }
     end instance
   end IsNode
@@ -35,7 +37,7 @@ object Lang2:
     end Aux
 
     transparent inline given instance: [L2 <: Lang2, N1] => (isn: IsNode[N1]) => Aux[L2, N1, ?] =
-      ${ MetaMacros.launderNodeImpl[isn.L, L2, N1] }
+      ${ MetaMacros.launderNodeImpl[isn.Path, L2, N1] }
     end instance
   end LaunderNode
 
@@ -68,11 +70,11 @@ object Lang2:
         applyImpl(ev(EmptyTuple))
       end apply
 
-      inline def apply[E](using ev: Tuple1[E] =:= Cases)(inline e: E): T =
+      inline def apply[E](using ev: Tuple1[E] =:= Cases)(e: E): T =
         applyImpl(ev(Tuple1(e)))
       end apply
 
-      inline def apply(inline cases: NamedTuple.NamedTuple[Labels, Cases]): T =
+      inline def apply(cases: NamedTuple.NamedTuple[Labels, Cases]): T =
         applyImpl(cases)
       end apply
 
@@ -102,17 +104,20 @@ object Lang2:
     private[forja] def applyImpl(idx: Int, elem: ErasedNode): T
   end SumMeta
 
-  trait Meta[L <: Lang2]:
-    L: L =>
-    
-    transparent inline given termMeta: [T] => (isn: IsNode[T]) => (term: Term[T]) => TermMeta[T] =
+  trait Impl[L <: Lang2]:
+    transparent inline given termMeta: [T] => (isn: IsNode[T]) => (inline ev: isn.L <:< L) => (term: Term[T]) => TermMeta[T] =
       ${ MetaMacros.termMetaImpl[L, T]('{ term }) }
     end termMeta
 
-    transparent inline given sumMeta: [T] => (isn: IsNode[T]) => (sum: Sum[T]) => SumMeta[T] =
+    transparent inline given sumMeta: [T] => (isn: IsNode[T]) => (inline ev: isn.L <:< L) => (sum: Sum[T]) => SumMeta[T] =
       ${ MetaMacros.sumMetaImpl[L, T]('{ sum }) }
     end sumMeta
-  end Meta
+  end Impl
+
+  trait Ext:
+    L: Lang2 =>
+
+  end Ext
 
   private[forja] trait ErasedNode:
 

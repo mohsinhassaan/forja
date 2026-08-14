@@ -12,7 +12,7 @@ object TypeAdjust:
 
     inline given ident: [L <: Lang2, N] => Ident[N] => Aux[L, N, N] = new Aux
 
-    inline given node: [L2 <: Lang2, N] => (launder: Lang2.LaunderNode[L2, N]) => Aux[L2, N, launder.N2] =
+    inline given node: [L <: Lang2, N] => (launder: Lang2.LaunderNode[L, N]) => Aux[L, N, launder.N2] =
       new Aux
     end node
   end Effective
