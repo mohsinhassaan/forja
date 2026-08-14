@@ -13,6 +13,7 @@ object Mini:
     object S:
       abstract class Foo derives Term:
         def foo: F[String]
+        def foo2: F[Byte]
       end Foo
       object Foo:
         abstract class Ping derives Term:
@@ -65,17 +66,21 @@ object Mini:
 
     val _ : TermMeta[L2.S.Foo] {
       type Companion = L2.S.Foo.type
-      type Cases = Tuple1[String]
-      type Labels = Tuple1["foo"]
+      type Cases = (String, Byte)
+      type Labels = ("foo", "foo2")
     } = summon[TermMeta[L2.S.Foo]]
 
     // TODO: how to convince it to resolve extension methods on the companion object.
     // Clearly all the types are right...
+    
+    L2.S.Foo.meta
 
-    summon[TermMeta[L3.S.Foo]].apply(L3.S.Foo)("str")
+    val foo = L2.S.Foo.M("foo", 42)
+    foo match
+      case L2.S.Foo.M(a, b) =>
+        println(s"foo $a, $b")
 
-    // but this works! It's something.
-    // (notice how Bar gets subtituted)
+    assert(L2.S.meta.ordinal(L2.S.M(foo)) == 1)
 
     val _ : TermMeta[L3.S.Foo.Ping] {
       type Companion = L3.S.Foo.Ping.type

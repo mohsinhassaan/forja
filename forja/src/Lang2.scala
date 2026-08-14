@@ -3,7 +3,6 @@ package forja
 import scala.quoted.Type
 import scala.annotation.publicInBinary
 import forja.util.TrivialMatch
-import scala.compiletime.erasedValue
 import scala.compiletime.Erased
 
 trait Lang2:
@@ -26,6 +25,14 @@ object Lang2:
       ${ MetaMacros.isNodeImpl[N] }
     end instance
   end IsNode
+
+  final class IsCompanion[C, T] extends Erased
+
+  object IsCompanion:
+    transparent inline given instance: [C, T] => IsCompanion[C, T] =
+      ${ MetaMacros.isCompanionImpl[C, T] }
+    end instance
+  end IsCompanion
 
   sealed trait LaunderNode[L2 <: Lang2, N1]:
     type N2
@@ -56,60 +63,67 @@ object Lang2:
     type Cases <: Tuple
   end NodeMeta
 
-  type UnapplyResult[Cases <: Tuple] = Cases match
-    case EmptyTuple => true
-    case Tuple1[t] => TrivialMatch[t]
-    case _ => TrivialMatch[Cases]
-  end UnapplyResult
-
   trait TermMeta[T] extends NodeMeta[T]:
     type Labels <: Tuple
 
-    extension (Companion: Companion)
-      inline def apply(using ev: EmptyTuple =:= Cases)(): T =
-        applyImpl(ev(EmptyTuple))
-      end apply
-
-      inline def apply[E](using ev: Tuple1[E] =:= Cases)(e: E): T =
-        applyImpl(ev(Tuple1(e)))
-      end apply
-
-      inline def apply(cases: NamedTuple.NamedTuple[Labels, Cases]): T =
-        applyImpl(cases)
-      end apply
-
-      inline def unapply(t: T): UnapplyResult[Cases] =
-        inline erasedValue[Cases] match
-          case _: EmptyTuple => true
-          case _: Tuple1[t] => ???
-          case _ => ???
-        end match
-      end unapply
-    end extension
+    @publicInBinary
+    private[forja] def applyImpl(arg: Any): T
 
     @publicInBinary
-    private[Lang2] def applyImpl(cases: Cases): T
+    private[forja] def unapplyImpl(t: T): Any
+  end TermMeta
+
+  object TermMeta:
+    sealed trait Appl[C, T] extends Any
+
+    final class Appl0[C, T](private val meta: TermMeta[T]) extends AnyVal, Appl[C, T]:
+      inline def apply(): T =
+        meta.applyImpl(().asInstanceOf)
+      end apply
+
+      def unapply(t: T): true = true
+    end Appl0
+
+    final class ApplN[C, T, ApplyArg, UnapplyResult](private val meta: TermMeta[T]) extends AnyVal, Appl[C, T]:
+      inline def apply(arg: ApplyArg): T =
+        meta.applyImpl(arg)
+      end apply
+
+      def unapply(t: T): TrivialMatch[UnapplyResult] =
+        TrivialMatch(meta.unapplyImpl(t).asInstanceOf[UnapplyResult])
+      end unapply
+    end ApplN
   end TermMeta
 
   trait SumMeta[T] extends NodeMeta[T]:
-    extension (Companion: Companion)
-      def ordinal(t: T): Int
-
-      inline def apply(inline elem: Tuple.Union[Cases]): T =
-        ${ MetaMacros.sumApplyImpl[Cases, T]('{ this }, '{ elem }) }
-      end apply
+    extension (T: T)
+      def ordinal: Int
     end extension
 
     @publicInBinary
     private[forja] def applyImpl(idx: Int, elem: ErasedNode): T
   end SumMeta
 
+  object SumMeta:
+    sealed trait Appl[C, T] extends Any
+
+    final class ApplN[C, T, Cases <: Tuple](private val meta: SumMeta[T]) extends AnyVal, Appl[C, T]:
+      inline def apply(arg: Tuple.Union[Cases]): T =
+        ${ MetaMacros.sumApplyImpl[Cases, T]('{ meta }, '{ arg }) }
+      end apply
+
+      def unapply(t: T): Tuple.Union[Cases] =
+        ???
+      end unapply
+    end ApplN
+  end SumMeta
+
   trait Impl[L <: Lang2]:
-    transparent inline given termMeta: [T] => (isn: IsNode[T]) => (inline ev: isn.L <:< L) => (term: Term[T]) => TermMeta[T] =
+    transparent inline given termMeta: [T] => (term: Term[T]) => (isn: IsNode[T]) => (inline ev: isn.L <:< L) => TermMeta[T] =
       ${ MetaMacros.termMetaImpl[L, T]('{ term }) }
     end termMeta
 
-    transparent inline given sumMeta: [T] => (isn: IsNode[T]) => (inline ev: isn.L <:< L) => (sum: Sum[T]) => SumMeta[T] =
+    transparent inline given sumMeta: [T] => (sum: Sum[T]) => (isn: IsNode[T]) => (inline ev: isn.L <:< L) => SumMeta[T] =
       ${ MetaMacros.sumMetaImpl[L, T]('{ sum }) }
     end sumMeta
   end Impl
@@ -122,13 +136,5 @@ object Lang2:
   private[forja] trait ErasedNode:
 
   end ErasedNode
-
-  sealed trait EffectiveType[U] extends Erased:
-    type T
-  end EffectiveType
-
-  object EffectiveType:
-
-  end EffectiveType
 end Lang2
 
